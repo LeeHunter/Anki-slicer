@@ -6,6 +6,9 @@ from PyQt6.QtWidgets import (
     QLabel,
     QMessageBox,
     QSlider,
+    QListWidget,
+    QListWidgetItem,
+    QCheckBox,
 )
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PyQt6.QtCore import QUrl, QTimer, Qt
@@ -23,23 +26,25 @@ class PlayerUI(QWidget):
     ):
         super().__init__()
         self.setWindowTitle("Anki-slicer Player")
-        self.setMinimumSize(900, 550)
+        self.setMinimumSize(900, 600)
 
         self.mp3_path = mp3_path
         self.orig_entries = orig_entries
         self.trans_entries = trans_entries
         self.current_index = 0
         self.flagged = []
+
         self.auto_pause_mode = False
-        self.slider_active = False  # Track slider drag
-        self.segment_done = False  # Prevent multiple pauses
+        self.slider_active = False
+        self.pending_index = None
+        self.waiting_for_resume = False
 
         # Player setup
         self.player = QMediaPlayer()
         self.audio_output = QAudioOutput()
         self.player.setAudioOutput(self.audio_output)
 
-        # Temp audio conversion (normalize sample rate)
+        # Temp audio conversion
         from pydub import AudioSegment
 
         self._tmp_wav = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
@@ -50,7 +55,7 @@ class PlayerUI(QWidget):
 
         # Timer for subtitle sync
         self.timer = QTimer()
-        self.timer.setInterval(100)  # ms
+        self.timer.setInterval(100)
         self.timer.timeout.connect(self.update_subtitles)
 
         # Slider signals
@@ -66,7 +71,7 @@ class PlayerUI(QWidget):
     def setup_ui(self):
         layout = QVBoxLayout()
 
-        # Labels
+        # Headers
         orig_title = QLabel("Original Subtitle")
         orig_title.setStyleSheet(
             "font-size: 18px; font-weight: bold; margin-top: 10px;"
@@ -76,7 +81,7 @@ class PlayerUI(QWidget):
             "font-size: 18px; font-weight: bold; margin-top: 10px;"
         )
 
-        # Subtitle boxes
+        # Subtitle displays
         self.orig_label = QLabel("(waiting for audio...)")
         self.orig_label.setWordWrap(True)
         self.orig_label.setStyleSheet(
@@ -124,103 +129,74 @@ class PlayerUI(QWidget):
         self.mode_btn.setCheckable(True)
         self.mode_btn.clicked.connect(self.toggle_mode)
 
-        self.export_btn = QPushButton("Export to Anki")
-        self.export_btn.clicked.connect(self.export_to_anki)
-
         controls.addWidget(self.play_btn)
         controls.addWidget(self.prev_btn)
         controls.addWidget(self.next_btn)
         controls.addWidget(self.flag_btn)
         controls.addWidget(self.mode_btn)
-        controls.addStretch()
-        controls.addWidget(self.export_btn)
-
         layout.addLayout(controls)
 
+        # Progress
         self.progress_label = QLabel(f"Subtitle 1 of {len(self.orig_entries)}")
         layout.addWidget(self.progress_label)
+
+        # === Flagged Segments box ===
+        self.flagged_list = QListWidget()
+        self.flagged_list.setFixedHeight(180)
+        layout.addWidget(QLabel("Flagged Segments"))
+        layout.addWidget(self.flagged_list)
+
+        btn_row = QHBoxLayout()
+        self.export_btn = QPushButton("Export Selection to Anki")
+        self.export_btn.clicked.connect(self.export_to_anki)
+
+        self.clear_btn = QPushButton("Clear All")
+        self.clear_btn.clicked.connect(self.clear_flagged_items)
+
+        btn_row.addWidget(self.export_btn)
+        btn_row.addWidget(self.clear_btn)
+        layout.addLayout(btn_row)
 
         self.setLayout(layout)
         self.update_subtitle_display()
 
-    # === Helpers ===
+    # === Playback + Subtitles ===
     def find_subtitle_index(self, position_sec: float) -> int:
-        """
-        Robust lookup:
-        - If inside a subtitle, return it.
-        - If past end_time but before next start_time, "stick" to current subtitle.
-        - If beyond all, return last subtitle.
-        """
         for i, entry in enumerate(self.orig_entries):
             if entry.start_time <= position_sec <= entry.end_time:
                 return i
             if i < len(self.orig_entries) - 1:
-                next_entry = self.orig_entries[i + 1]
-                if entry.end_time < position_sec < next_entry.start_time:
+                nxt = self.orig_entries[i + 1]
+                if entry.end_time < position_sec < nxt.start_time:
                     return i
         return len(self.orig_entries) - 1
 
-    # === Slider events ===
-    def on_slider_pressed(self):
-        self.slider_active = True
-
-    def on_slider_released(self):
-        self.slider_active = False
-        pos = self.pos_slider.value()
-        self.player.setPosition(pos)
-        self.current_index = self.find_subtitle_index(pos / 1000.0)
-        self.update_subtitle_display()
-        self.segment_done = False  # Reset flag when seeking
-
-    # === Playback controls ===
-    def toggle_play(self):
-        if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
-            self.player.pause()
-            self.play_btn.setText("Play")
-        else:
-            self.player.play()
-            self.play_btn.setText("Pause")
-            self.segment_done = False  # Reset flag when resuming playback
-
-    def previous_subtitle(self):
-        if self.current_index > 0:
-            self.current_index -= 1
-            self.jump_to_current_subtitle()
-
-    def next_subtitle(self):
-        if self.current_index < len(self.orig_entries) - 1:
-            self.current_index += 1
-            self.jump_to_current_subtitle()
-
-    def jump_to_current_subtitle(self):
-        entry = self.orig_entries[self.current_index]
-        self.player.setPosition(int(entry.start_time * 1000))
-        self.update_subtitle_display()
-        self.segment_done = False  # Reset flag when jumping
-
-    # === Subtitles + Auto-Pause ===
     def update_subtitles(self):
         if self.slider_active:
             return
 
         position_sec = self.player.position() / 1000.0
-        new_index = self.find_subtitle_index(position_sec)
 
-        if new_index != self.current_index:
-            # Subtitle transition detected - update display
-            self.current_index = new_index
-            self.update_subtitle_display()
-            self.segment_done = False
-
-            # Auto-pause: stop at the START of the new subtitle
-            if (
-                self.auto_pause_mode
-                and self.player.playbackState()
-                == QMediaPlayer.PlaybackState.PlayingState
-            ):
-                self.player.pause()
-                self.play_btn.setText("Play")
-                self.segment_done = True
+        if self.auto_pause_mode:
+            # Auto-pause mode: check if we've crossed end_time of current subtitle
+            if not self.waiting_for_resume:
+                current_entry = self.orig_entries[self.current_index]
+                if position_sec >= current_entry.end_time:
+                    # Hit boundary → pause but keep showing current subtitle
+                    self.pending_index = min(
+                        self.current_index + 1, len(self.orig_entries) - 1
+                    )
+                    self.player.pause()
+                    self.play_btn.setText("Play")
+                    self.waiting_for_resume = True
+            # Don't update display in auto-pause mode
+            return
+        else:
+            # Continuous mode: normal position-based mapping
+            new_index = self.find_subtitle_index(position_sec)
+            if new_index != self.current_index:
+                self.current_index = new_index
+                self.update_subtitle_display()
 
     def update_subtitle_display(self):
         orig_entry = self.orig_entries[self.current_index]
@@ -237,64 +213,132 @@ class PlayerUI(QWidget):
             f"Subtitle {self.current_index + 1} of {len(self.orig_entries)}"
         )
 
-    # === Flagging & Export ===
+    def toggle_play(self):
+        if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            self.player.pause()
+            self.play_btn.setText("Play")
+        else:
+            # If resuming from auto-pause, advance subtitle now
+            if self.waiting_for_resume and self.pending_index is not None:
+                self.current_index = self.pending_index
+                self.pending_index = None
+                self.update_subtitle_display()
+                self.waiting_for_resume = False
+
+            self.player.play()
+            self.play_btn.setText("Pause")
+
+    # === Flagging ===
     def flag_current(self):
         entry = self.orig_entries[self.current_index]
         if entry not in self.flagged:
             self.flagged.append(entry)
-            QMessageBox.information(
-                self, "Flagged", f'Flagged segment {entry.index}:\n"{entry.text[:60]}…"'
+            start_time = self.format_time(int(entry.start_time * 1000))
+            orig_snip = " ".join(entry.text.split()[:4]) + (
+                "..." if len(entry.text.split()) > 4 else ""
             )
+            trans = (
+                self.trans_entries[entry.index - 1]
+                if entry.index <= len(self.trans_entries)
+                else None
+            )
+            trans_snip = ""
+            if trans:
+                trans_snip = " / " + " ".join(trans.text.split()[:4])
+                if len(trans.text.split()) > 4:
+                    trans_snip += "..."
+            line = f"{start_time} {orig_snip}{trans_snip}"
+            item = QListWidgetItem()
+            checkbox = QCheckBox(line)
+            checkbox.setChecked(True)
+            self.flagged_list.addItem(item)
+            self.flagged_list.setItemWidget(item, checkbox)
 
+    def clear_flagged_items(self):
+        self.flagged.clear()
+        self.flagged_list.clear()
+
+    # === Export ===
     def export_to_anki(self):
-        if not self.flagged:
-            QMessageBox.warning(self, "No flags", "You haven't flagged any segments!")
+        if self.flagged_list.count() == 0:
+            QMessageBox.warning(self, "No Flags", "No flagged items to export!")
             return
-
         from slicer import slice_audio
         from ankiconnect import AnkiConnect
 
         anki = AnkiConnect()
         anki.ensure_deck()
         out_dir = "anki_clips"
-
         exported, skipped = 0, 0
-
-        for entry in self.flagged:
-            trans = (
-                self.trans_entries[entry.index - 1]
-                if entry.index <= len(self.trans_entries)
-                else None
-            )
-            clip_path = slice_audio(self.mp3_path, entry, out_dir)
-
-            try:
-                anki.add_note(
-                    entry.text,
-                    trans.text if trans else "(no translation)",
-                    clip_path,
+        for i in range(self.flagged_list.count()):
+            item = self.flagged_list.item(i)
+            widget = self.flagged_list.itemWidget(item)
+            if (
+                isinstance(widget, QCheckBox)
+                and widget.isChecked()
+                and widget.isEnabled()
+            ):
+                entry = self.flagged[i]
+                trans = (
+                    self.trans_entries[entry.index - 1]
+                    if entry.index <= len(self.trans_entries)
+                    else None
                 )
-                exported += 1
-            except Exception as e:
-                if "duplicate" in str(e).lower():
-                    skipped += 1
-                else:
-                    raise  # rethrow unexpected errors
-
+                clip_path = slice_audio(self.mp3_path, entry, out_dir)
+                try:
+                    anki.add_note(
+                        entry.text,
+                        trans.text if trans else "(no translation)",
+                        clip_path,
+                    )
+                    exported += 1
+                except Exception as e:
+                    if "duplicate" in str(e).lower():
+                        skipped += 1
+                    else:
+                        raise
+                widget.setEnabled(False)
         QMessageBox.information(
             self,
-            "Export Complete",
+            "Export Done",
             f"Exported {exported} notes. Skipped {skipped} duplicates.",
         )
 
-    # === Mode toggle ===
+    # === Navigation ===
+    def previous_subtitle(self):
+        if self.current_index > 0:
+            self.current_index -= 1
+            self.jump_to_current_subtitle()
+
+    def next_subtitle(self):
+        if self.current_index < len(self.orig_entries) - 1:
+            self.current_index += 1
+            self.jump_to_current_subtitle()
+
+    def jump_to_current_subtitle(self):
+        entry = self.orig_entries[self.current_index]
+        self.player.setPosition(int(entry.start_time * 1000))
+        self.update_subtitle_display()
+        self.waiting_for_resume = False  # Clear any pending state
+
     def toggle_mode(self):
         self.auto_pause_mode = self.mode_btn.isChecked()
         self.mode_btn.setText(
             "Mode: Auto‑Pause" if self.auto_pause_mode else "Mode: Continuous"
         )
 
-    # === Slider / time ===
+    # === Slider ===
+    def on_slider_pressed(self):
+        self.slider_active = True
+
+    def on_slider_released(self):
+        self.slider_active = False
+        pos = self.pos_slider.value()
+        self.player.setPosition(pos)
+        self.current_index = self.find_subtitle_index(pos / 1000.0)
+        self.update_subtitle_display()
+        self.waiting_for_resume = False  # Clear any pending state
+
     def update_slider(self, pos):
         if not self.pos_slider.isSliderDown():
             self.pos_slider.setValue(pos)
@@ -313,7 +357,7 @@ class PlayerUI(QWidget):
     def format_time(ms: int) -> str:
         seconds = ms // 1000
         m, s = divmod(seconds, 60)
-        return f"{m:02}:{s:02}"
+        return f"{m}:{s:02}"
 
     # === Cleanup ===
     def closeEvent(self, event):  # type: ignore[override]

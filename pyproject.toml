@@ -26,3 +26,6 @@ Issues = "https://github.com/YOUR_USERNAME/anki-slicer/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
+
+[project.scripts]
+anki-slicer = "anki_slicer.main:main"

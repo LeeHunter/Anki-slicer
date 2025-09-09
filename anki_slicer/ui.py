@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import pyqtSignal, Qt
 from typing import Union
 import os
-from config import load_config, save_config
+from anki_slicer.config import load_config, save_config
 
 
 class FileSelectorUI(QWidget):

@@ -1,5 +1,5 @@
 from pydub import AudioSegment
-from subs import SubtitleEntry
+from anki_slicer.subs import SubtitleEntry
 import os
 
 

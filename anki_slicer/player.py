@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PyQt6.QtCore import QUrl, QTimer, Qt
-from subs import SubtitleEntry
+from anki_slicer.subs import SubtitleEntry
 import tempfile
 import os
 
@@ -344,8 +344,8 @@ class PlayerUI(QWidget):
         if self.flagged_list.count() == 0:
             QMessageBox.warning(self, "No Flags", "No flagged items to export!")
             return
-        from slicer import slice_audio
-        from ankiconnect import AnkiConnect
+        from anki_slicer.slicer import slice_audio
+        from anki_slicer.ankiconnect import AnkiConnect
 
         anki = AnkiConnect()
         anki.ensure_deck()

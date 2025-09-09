@@ -1,32 +1,80 @@
-# Anki-slicer
+🎧 Anki‑Slicer
 
-A utility to take an audio file (the most common filetypes) and 2 SRT files (original text &amp; translation), select the sentences you want to learn and then export them into Anki in bulk.  
+Anki‑Slicer is a utility that lets you take an audio file (MP3, WAV, etc.) plus two SRT subtitles (original + translation), preview and flag sentences you want to learn, and then bulk‑export them into Anki flashcards — fully synchronized with the audio.
 
-Prerequisites:
- - Anki and AnkiConnect (must be running).
- - An audio file with two standard SRT (subtitle) files. One with transcription and one of translation.  
+It’s designed for language learners who want to build rich, sentence‑level listening cards with audio + subtitles, all in just a few clicks.
+✨ Features
 
-I use McWhisper (a paid app) to create the SRT files directly from a YouTube video, audio file or whatever. It also allows me to export the audio as a separate file. It's quick and easy. There are also other tools you can use to get SRT files from YouTube audio, then run them through AI etc. I find it's just a LOT easier to use McWhisper. 
+    🎵 Load an audio file + a pair of SRT subtitles (original + translation).
+    ⏯️ Continuous / Auto‑Pause playback modes for sentence‑by‑sentence listening.
+    🕹 Slider & Time Display to seek anywhere in the audio.
+    🚩 Flag individual sentences or bulk‑flag all search matches.
+    🔎 Search subtitles (original, translation, or both) and jump through results.
+    🗂 Flagged list with checkboxes (select/deselect before exporting).
+    📤 Export flagged items into Anki via AnkiConnect — creates cards automatically.
+    🃏 Output deck: AnkiSlicer (rename inside Anki if you want multiple decks).
 
-**How to Use Anki-Slicer**
+📦 Prerequisites
 
- - Ensure Anki (with the Anki-Connect) plugin is running.
- - Open **Anki-Slicer**.
- - Select your audio file and the two SRT format files (the transcription of the original and the  translation)
- - Click **Start**. 
- - Use the **Mode** button on the right to select **Continuous** or **Auto-pause** play.
- - Click **Play** to play the file or use the slider to play from a different location.
- - Click **Flag for Anki** to add a sentence to the queue.
- - Click the checkboxes to unselect/select a sentence.
- - Click Export Selection to Anki. Each line in the queue will become an Anki card.
+    Anki with the AnkiConnect add‑on installed and running.
+    An audio file and two SRT files:
+        Original transcript (same language as the audio).
+        Translation of the original text.
 
-<img width="890" height="628" alt="SCR-20250908-rkch" src="https://github.com/user-attachments/assets/db852742-19f9-48e0-af76-fd59b68a201a" />
+💡 Tip: I personally use McWhisper (paid app) to generate accurate SRTs and export audio from YouTube or audio files. Other workflows are possible — e.g. extracting captions from YouTube, generating with Whisper/AI, etc.
+🚀 Installation
 
+Clone the repo and install dependencies (Python 3.10+ recommended):
 
-In Anki, the cards will be created in a deck called AnkiSlicer. You can rename the deck in Anki desktop if you want to create several different decks.  
+bash
 
-You could also enhance the translation SRT file by running it through AI and asking it to provide more explanations, transliterations (e.g. pinyin for Chinese), etc. That extra information will appear on the answer side of the card. 
+Copy
+git clone https://github.com/YOUR_USERNAME/anki-slicer.git
+cd anki-slicer
+pip install -r requirements.txt
 
+🎮 How to Use Anki‑Slicer
 
-Anki-slicer has so far only been tested on a single Mac computer. YMMV
+    Ensure Anki + AnkiConnect are running.
+    Launch Anki‑Slicer:
 
+    bash
+
+    Copy
+    python main.py
+
+    Select your:
+        Audio file
+        Original SRT
+        Translation SRT
+    Use the controls:
+        ▶ Play / ⏸ Pause / ⏮ Previous / ⏭ Next
+        Mode toggle = Continuous vs. Auto‑Pause playback
+        Use the slider to jump around
+        🔍 Search subtitles (Original / Translation / Both)
+        🚩 Flag sentences (individually or bulk‑flag from Search)
+    Review your flagged list, check/uncheck items.
+    Click Export Selection to Anki → cards are created in your AnkiSlicer deck.
+
+🖼 UI Preview
+
+Anki-Slicer Screenshot
+🛠 Advanced Use
+
+    Enhance your translation SRT before loading:
+        Add explanations, grammar notes, transliterations (e.g. pinyin for Chinese).
+        These extras appear on the answer side of the Anki card.
+    Organize by subject: rename or split cards into different decks once in Anki.
+
+🤝 Contributing
+
+Contributions are welcome!
+Ideas, bug reports, feature requests → open an Issue.
+Pull requests are encouraged — new features (UI tweaks, extra export formats, etc.) are fair game.
+⚖️ License
+
+This project is licensed under the MIT License — see LICENSE for details.
+🧪 Status
+
+Currently tested primarily on macOS. Windows/Linux should work but are not yet validated.
+YMMV (Your Mileage May Vary). Feedback and testing reports are very welcome!

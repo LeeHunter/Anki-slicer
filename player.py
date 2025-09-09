@@ -9,6 +9,10 @@ from PyQt6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QCheckBox,
+    QLineEdit,
+    QRadioButton,
+    QButtonGroup,
+    QGroupBox,
 )
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PyQt6.QtCore import QUrl, QTimer, Qt
@@ -26,7 +30,7 @@ class PlayerUI(QWidget):
     ):
         super().__init__()
         self.setWindowTitle("Anki-slicer Player")
-        self.setMinimumSize(900, 600)
+        self.setMinimumSize(950, 650)
 
         self.mp3_path = mp3_path
         self.orig_entries = orig_entries
@@ -34,10 +38,15 @@ class PlayerUI(QWidget):
         self.current_index = 0
         self.flagged = []
 
+        # State
         self.auto_pause_mode = False
         self.slider_active = False
         self.pending_index = None
         self.waiting_for_resume = False
+
+        # For search
+        self.search_matches = []
+        self.search_index = 0
 
         # Player setup
         self.player = QMediaPlayer()
@@ -72,7 +81,7 @@ class PlayerUI(QWidget):
         layout = QVBoxLayout()
 
         # Headers
-        orig_title = QLabel("Original Subtitle")
+        orig_title = QLabel("Original")
         orig_title.setStyleSheet(
             "font-size: 18px; font-weight: bold; margin-top: 10px;"
         )
@@ -140,6 +149,40 @@ class PlayerUI(QWidget):
         self.progress_label = QLabel(f"Subtitle 1 of {len(self.orig_entries)}")
         layout.addWidget(self.progress_label)
 
+        # === Search controls ===
+        search_row = QHBoxLayout()
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Search subtitles...")
+        self.search_btn = QPushButton("Search")
+        self.search_btn.clicked.connect(self.run_search)
+        self.next_match_btn = QPushButton("Next")
+        self.next_match_btn.clicked.connect(self.next_match)
+        self.flag_all_btn = QPushButton("Flag All Matches")
+        self.flag_all_btn.clicked.connect(self.flag_all_matches)
+
+        search_row.addWidget(self.search_input)
+        search_row.addWidget(self.search_btn)
+        search_row.addWidget(self.next_match_btn)
+        search_row.addWidget(self.flag_all_btn)
+        layout.addLayout(search_row)
+
+        # === Search Scope (grouped in QGroupBox) ===
+        scope_group_box = QGroupBox("Search Scope")
+        scope_layout = QHBoxLayout()
+
+        self.scope_group = QButtonGroup(self)
+        self.radio_orig = QRadioButton("Original")
+        self.radio_trans = QRadioButton("Translation")
+        self.radio_both = QRadioButton("Both")
+        self.radio_both.setChecked(True)
+
+        for rb in [self.radio_orig, self.radio_trans, self.radio_both]:
+            self.scope_group.addButton(rb)
+            scope_layout.addWidget(rb)
+
+        scope_group_box.setLayout(scope_layout)
+        layout.addWidget(scope_group_box)
+
         # === Flagged Segments box ===
         self.flagged_list = QListWidget()
         self.flagged_list.setFixedHeight(180)
@@ -149,10 +192,8 @@ class PlayerUI(QWidget):
         btn_row = QHBoxLayout()
         self.export_btn = QPushButton("Export Selection to Anki")
         self.export_btn.clicked.connect(self.export_to_anki)
-
         self.clear_btn = QPushButton("Clear All")
         self.clear_btn.clicked.connect(self.clear_flagged_items)
-
         btn_row.addWidget(self.export_btn)
         btn_row.addWidget(self.clear_btn)
         layout.addLayout(btn_row)
@@ -174,25 +215,19 @@ class PlayerUI(QWidget):
     def update_subtitles(self):
         if self.slider_active:
             return
-
         position_sec = self.player.position() / 1000.0
-
         if self.auto_pause_mode:
-            # Auto-pause mode: check if we've crossed end_time of current subtitle
             if not self.waiting_for_resume:
                 current_entry = self.orig_entries[self.current_index]
                 if position_sec >= current_entry.end_time:
-                    # Hit boundary → pause but keep showing current subtitle
                     self.pending_index = min(
                         self.current_index + 1, len(self.orig_entries) - 1
                     )
                     self.player.pause()
                     self.play_btn.setText("Play")
                     self.waiting_for_resume = True
-            # Don't update display in auto-pause mode
             return
         else:
-            # Continuous mode: normal position-based mapping
             new_index = self.find_subtitle_index(position_sec)
             if new_index != self.current_index:
                 self.current_index = new_index
@@ -218,15 +253,61 @@ class PlayerUI(QWidget):
             self.player.pause()
             self.play_btn.setText("Play")
         else:
-            # If resuming from auto-pause, advance subtitle now
             if self.waiting_for_resume and self.pending_index is not None:
                 self.current_index = self.pending_index
                 self.pending_index = None
                 self.update_subtitle_display()
                 self.waiting_for_resume = False
-
             self.player.play()
             self.play_btn.setText("Pause")
+
+    # === Search Features ===
+    def run_search(self):
+        term = self.search_input.text().strip().lower()
+        if not term:
+            QMessageBox.warning(self, "Empty Search", "Please enter a search term.")
+            return
+        self.search_matches = []
+        for i, entry in enumerate(self.orig_entries):
+            orig_text = entry.text.lower()
+            trans_text = (
+                self.trans_entries[i].text.lower()
+                if i < len(self.trans_entries)
+                else ""
+            )
+            match_orig = self.radio_orig.isChecked() and term in orig_text
+            match_trans = self.radio_trans.isChecked() and term in trans_text
+            match_both = self.radio_both.isChecked() and (
+                term in orig_text or term in trans_text
+            )
+            if match_orig or match_trans or match_both:
+                self.search_matches.append(i)
+        if not self.search_matches:
+            QMessageBox.information(self, "No Results", f"No matches for '{term}'.")
+            return
+        self.search_index = 0
+        self.jump_to_match()
+
+    def jump_to_match(self):
+        if not self.search_matches:
+            return
+        idx = self.search_matches[self.search_index]
+        self.current_index = idx
+        entry = self.orig_entries[idx]
+        self.player.setPosition(int(entry.start_time * 1000))
+        self.update_subtitle_display()
+        self.search_index = (self.search_index + 1) % len(self.search_matches)
+
+    def next_match(self):
+        self.jump_to_match()
+
+    def flag_all_matches(self):
+        if not self.search_matches:
+            QMessageBox.information(self, "No Matches", "Run a search first.")
+            return
+        for idx in self.search_matches:
+            self.current_index = idx
+            self.flag_current()
 
     # === Flagging ===
     def flag_current(self):
@@ -319,7 +400,7 @@ class PlayerUI(QWidget):
         entry = self.orig_entries[self.current_index]
         self.player.setPosition(int(entry.start_time * 1000))
         self.update_subtitle_display()
-        self.waiting_for_resume = False  # Clear any pending state
+        self.waiting_for_resume = False
 
     def toggle_mode(self):
         self.auto_pause_mode = self.mode_btn.isChecked()
@@ -337,7 +418,7 @@ class PlayerUI(QWidget):
         self.player.setPosition(pos)
         self.current_index = self.find_subtitle_index(pos / 1000.0)
         self.update_subtitle_display()
-        self.waiting_for_resume = False  # Clear any pending state
+        self.waiting_for_resume = False
 
     def update_slider(self, pos):
         if not self.pos_slider.isSliderDown():

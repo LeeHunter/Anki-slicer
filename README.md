@@ -22,6 +22,7 @@ It’s designed for language learners who want to build rich, sentence‑level l
         Translation of the original text.
 
 💡 Tip: I personally use McWhisper (paid app) to generate accurate SRTs and export audio from YouTube or audio files. Other workflows are possible — e.g. extracting captions from YouTube, generating with Whisper/AI, etc.
+
 🚀 Installation
 
 Clone the repo and install dependencies (Python 3.10+ recommended):
@@ -71,9 +72,11 @@ Anki-Slicer Screenshot
 Contributions are welcome!
 Ideas, bug reports, feature requests → open an Issue.
 Pull requests are encouraged — new features (UI tweaks, extra export formats, etc.) are fair game.
+
 ⚖️ License
 
 This project is licensed under the MIT License — see LICENSE for details.
+
 🧪 Status
 
 Currently tested primarily on macOS. Windows/Linux should work but are not yet validated.

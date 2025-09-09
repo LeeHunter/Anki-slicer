@@ -20,7 +20,12 @@ I use McWhisper (a paid app) to create the SRT files directly from a YouTube vid
  - Click the checkboxes to unselect/select a sentence.
  - Click Export Selection to Anki. Each line in the queue will become an Anki card.
 
-In Anki, the cards will be created in the AnkiSlicer deck. You can rename the deck in Anki desktop if you want to create several different decks.  You could also enhance the translation SRT file by running it through AI and asking it to provide more explanations, transliterations (e.g. pinyin for Chinese), etc. Then when use it in Anki-slicer that extra information will be added to the answer side of the card. 
+<img width="890" height="628" alt="SCR-20250908-rkch" src="https://github.com/user-attachments/assets/db852742-19f9-48e0-af76-fd59b68a201a" />
+
+
+In Anki, the cards will be created in a deck called AnkiSlicer. You can rename the deck in Anki desktop if you want to create several different decks.  
+
+You could also enhance the translation SRT file by running it through AI and asking it to provide more explanations, transliterations (e.g. pinyin for Chinese), etc. That extra information will appear on the answer side of the card. 
 
 
 Anki-slicer has so far only been tested on a single Mac computer. YMMV

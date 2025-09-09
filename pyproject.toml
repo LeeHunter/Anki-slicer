@@ -7,7 +7,7 @@ name = "anki-slicer"
 version = "0.2.0"
 description = "Slice audio + subtitles and export to Anki via AnkiConnect"
 authors = [
-    { name = "YOUR NAME", email = "you@example.com" }
+    { name = "Lee Hunter", email = "you@example.com" }
 ]
 license = { text = "MIT" }
 readme = "README.md"
@@ -21,8 +21,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/YOUR_USERNAME/anki-slicer"
-Issues = "https://github.com/YOUR_USERNAME/anki-slicer/issues"
+Homepage = "https://github.com/leehunter/anki-slicer"
+Issues = "https://github.com/leehunter/anki-slicer/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]

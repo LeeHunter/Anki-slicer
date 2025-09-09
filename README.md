@@ -2,10 +2,9 @@
 
 Anki‑Slicer is a utility that lets you take an audio file (MP3, WAV, etc.) plus two SRT subtitles (original + translation), preview and flag sentences you want to learn, and then bulk‑export them into Anki flashcards — fully synchronized with the audio.
 
-It’s designed for language learners who want to build rich, sentence‑level listening cards with audio + subtitles, all in just a few clicks.
+It’s designed for language learners who want to build rich, sentence‑level listening cards with audio + text, all in just a few clicks.
 ✨ Features
 
-    🎵 Load an audio file + a pair of SRT subtitles (original + translation).
     ⏯️ Continuous / Auto‑Pause playback modes for sentence‑by‑sentence listening.
     🕹 Slider & Time Display to seek anywhere in the audio.
     🚩 Flag individual sentences or bulk‑flag all search matches.
@@ -80,4 +79,4 @@ This project is licensed under the MIT License — see LICENSE for details.
 🧪 Status
 
 Currently tested primarily on macOS. Windows/Linux should work but are not yet validated.
-YMMV (Your Mileage May Vary). Feedback and testing reports are very welcome!
+ Feedback and testing reports are welcome!

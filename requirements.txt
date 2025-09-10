@@ -1,15 +1,6 @@
-black==25.1.0
-certifi==2025.8.3
-charset-normalizer==3.4.3
-click==8.2.1
-idna==3.10
-mypy_extensions==1.1.0
-packaging==25.0
-pathspec==0.12.1
-platformdirs==4.4.0
-pydub==0.25.1
-PyQt6==6.9.1
-PyQt6-Qt6==6.9.2
-PyQt6_sip==13.10.2
-requests==2.32.5
-urllib3==2.5.0
+# requirements.txt
+pydub>=0.25.1
+PyQt6>=6.6.0
+requests>=2.31.0
+numpy>=1.26.0
+matplotlib>=3.7.0

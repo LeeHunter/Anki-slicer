@@ -1,0 +1,5 @@
+# dev-requirements.txt
+black>=25.1.0
+mypy>=1.11.2
+flake8>=7.1.1
+pytest>=8.3.3

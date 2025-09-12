@@ -64,9 +64,10 @@ pip install -e .
 
 🖼 UI Preview
 
-[<img width="938" height="789" alt="SCR-20250912-gpjp" src="https://github.com/user-attachments/assets/93ab84f6-2e16-44ae-a6b4-defb1b1a0a47" />](https://private-user-images.githubusercontent.com/1231548/488928663-c13ba5cb-5a14-4a84-bafa-4e545934db9f.png?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NTc2OTQyNzgsIm5iZiI6MTc1NzY5Mzk3OCwicGF0aCI6Ii8xMjMxNTQ4LzQ4ODkyODY2My1jMTNiYTVjYi01YTE0LTRhODQtYmFmYS00ZTU0NTkzNGRiOWYucG5nP1gtQW16LUFsZ29yaXRobT1BV1M0LUhNQUMtU0hBMjU2JlgtQW16LUNyZWRlbnRpYWw9QUtJQVZDT0RZTFNBNTNQUUs0WkElMkYyMDI1MDkxMiUyRnVzLWVhc3QtMSUyRnMzJTJGYXdzNF9yZXF1ZXN0JlgtQW16LURhdGU9MjAyNTA5MTJUMTYxOTM4WiZYLUFtei1FeHBpcmVzPTMwMCZYLUFtei1TaWduYXR1cmU9ZTI1MGI3NmY1ZTJiNjliMmI5OWE2MzY3YWYyMjQ5YWJmYzA3ZTMyYzkyMzgyM2M2NGI1ZGM0NDViMDQ5N2E1OSZYLUFtei1TaWduZWRIZWFkZXJzPWhvc3QifQ.1PmuEgIlNZRebS8Pg5l0ETVgHyCX1QtpbLeyH_8pneo)
+<img width="938" height="789" alt="Image" src="https://github.com/user-attachments/assets/c13ba5cb-5a14-4a84-bafa-4e545934db9f" />
 
 Anki-Slicer Screenshot
+
 🛠 Tip
 
     Before using Anki-Slicer you might want to edit your translation SRT before loading:

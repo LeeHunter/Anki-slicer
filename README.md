@@ -7,7 +7,8 @@
 Anki‑Slicer is a utility that lets you take an audio file (MP3, WAV, etc.) plus two SRT subtitles (original + translation), preview and flag sentences you want to learn, and then export it into an Anki flashcard deck — fully synchronized with the audio.
 
 It’s designed for language learners who want to build rich, sentence‑level listening cards with audio + text, all in just a few clicks.
-✨ Features
+
+## ✨ Features
 
     ⏯️ Precise adjustment of audio selection (no more clipped audio or extra sounds).
     🕹 Slider & Time Display to seek anywhere in the audio.
@@ -15,7 +16,7 @@ It’s designed for language learners who want to build rich, sentence‑level l
     📤 Export flagged items into Anki via AnkiConnect — creates cards automatically.
    
 
-📦 Prerequisites
+## 📦 Prerequisites
 
     Python 3.9 or later
     Anki with the AnkiConnect add‑on installed and running.
@@ -23,7 +24,7 @@ It’s designed for language learners who want to build rich, sentence‑level l
         Original transcript (same language as the audio).
         Translation of the original text.
 
-💡 Tip: I personally use McWhisper (paid app) to generate accurate SRTs and export audio from YouTube or audio files. Other workflows are possible — e.g. extracting captions from YouTube, generating with whisper.AI, etc.
+💡 Tip: I personally use McWhisper (paid app) which can generate accurate SRTs (original and translation) and then export  the audio from YouTube videos etc. Other workflows are possible — e.g. extracting captions from YouTube, generating with whisper.AI, etc.
 
 
 ## 🚀 Installation
@@ -72,22 +73,22 @@ pip install -e .
 
 🛠 Tip
 
-    Before using Anki-Slicer you might want to edit your translation SRT before loading:
-        For example you can use AI to add explanations, grammar notes, transliterations etc. 
-        This text appears on the answer side of the Anki card. Note that Anki uses HTML for formatting. 
+Before using Anki-Slicer you might want to edit your translation SRT before loading:
+For example you can use AI to add explanations, grammar notes, transliterations etc. 
+This text appears on the answer side of the Anki card. Note that Anki uses HTML formatting. 
     
 
-🤝 Contributing
+## 🤝 Contributing
 
 Contributions are welcome!
 Ideas, bug reports, feature requests → open an Issue.
 Pull requests are encouraged — new features (UI tweaks, extra export formats, etc.) are fair game.
 
-⚖️ License
+## ⚖️ License
 
 This project is licensed under the MIT License — see LICENSE for details.
 
-🧪 Status
+## 🧪 Status
 
 Currently tested only on macOS. Windows/Linux should work but are not yet validated.
- Feedback and testing reports are welcome!
+Feedback and testing reports are welcome!

@@ -25,7 +25,7 @@ It’s designed for language learners who want to build rich, sentence‑level l
 ## 🚀 Installation
 
 ### Easy install (from PyPI) – **recommended**
-```bash
+
 pip install anki-slicer
 
 ### Install directly from GitHub

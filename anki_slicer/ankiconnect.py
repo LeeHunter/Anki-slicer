@@ -1,50 +1,68 @@
 import requests
 import json
-import base64
 import os
 
-ANKI_CONNECT_URL = "http://localhost:8765"
 
 class AnkiConnect:
-    def __init__(self, deck_name="AnkiSlicer", note_type="Basic"):
-        self.deck_name = deck_name
-        self.note_type = note_type
+    def __init__(self, url="http://localhost:8765"):
+        self.url = url
 
-    def request(self, action, **params):
-        payload = {"action": action, "params": params, "version": 6}
-        response = requests.post(ANKI_CONNECT_URL, json=payload).json()
-        if "error" in response and response["error"]:
-            raise Exception(response["error"])
-        return response.get("result")
+    def _invoke(self, action, **params):
+        """Send a request to AnkiConnect."""
+        request_data = {"action": action, "version": 6, "params": params}
 
-    def ensure_deck(self):
-        self.request("createDeck", deck=self.deck_name)
+        try:
+            response = requests.post(self.url, json=request_data)
+            response.raise_for_status()
+            result = response.json()
 
-    def add_note(self, front, back, audio_path):
-        # Read MP3 as bytes for upload
-        with open(audio_path, "rb") as f:
-            audio_data = f.read()
-        
-        b64 = base64.b64encode(audio_data).decode("utf-8")
-        filename = os.path.basename(audio_path)
+            if result.get("error"):
+                raise Exception(f"AnkiConnect error: {result['error']}")
 
-        return self.request(
-            "addNote",
-            note={
-                "deckName": self.deck_name,
-                "modelName": self.note_type,
-                "fields": {
-                    "Front": front,
-                    "Back": back
-                },
-                "options": {
-                    "allowDuplicate": False
-                },
-                "tags": ["anki-slicer"],
-                "audio": [{
-                    "data": b64,
-                    "filename": filename,
-                    "fields": ["Front"]
-                }]
-            }
-        )
+            return result.get("result")
+        except requests.exceptions.RequestException as e:
+            raise Exception(f"Failed to connect to AnkiConnect: {e}")
+
+    def ensure_deck(self, deck_name: str = "AnkiSlicer"):
+        """Ensure a deck exists in Anki (creates if missing)."""
+        try:
+            self._invoke("createDeck", deck=deck_name)
+        except Exception as e:
+            # Ignore if deck already exists
+            if "already exists" not in str(e).lower():
+                raise Exception(f"Failed to ensure deck '{deck_name}': {e}")
+
+    def add_note(
+        self, front: str, back: str, audio_path: str, deck_name: str = "AnkiSlicer"
+    ):
+        """Add a note to Anki with audio attachment."""
+        note = {
+            "deckName": deck_name,
+            "modelName": "Basic",
+            "fields": {
+                "Front": front,
+                "Back": back,
+            },
+            "audio": [
+                {
+                    "path": audio_path,
+                    "filename": os.path.basename(audio_path),
+                    "fields": ["Front"],
+                }
+            ],
+        }
+
+        try:
+            result = self._invoke("addNote", note=note)
+            return result
+        except Exception as e:
+            raise Exception(f"Failed to add note: {e}")
+
+    def create_deck(self, deck_name: str):
+        """Create a new deck if it doesn't exist."""
+        try:
+            self._invoke("createDeck", deck=deck_name)
+        except Exception as e:
+            # Deck might already exist, which is fine
+            if "already exists" not in str(e).lower():
+                raise Exception(f"Failed to create deck '{deck_name}': {e}")

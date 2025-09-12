@@ -42,7 +42,7 @@ class FileSelectorUI(QWidget):
         layout.setSpacing(12)
 
         layout.addWidget(QLabel("Choose your files:"))
-        layout.addLayout(self._row("MP3 file", self.mp3_path_edit, self._select_mp3))
+        layout.addLayout(self._row("Audio file", self.mp3_path_edit, self._select_mp3))
         layout.addLayout(
             self._row(
                 "Original SRT (transcript)", self.orig_srt_edit, self._select_orig_srt

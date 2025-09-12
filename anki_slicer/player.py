@@ -6,17 +6,17 @@ from PyQt6.QtWidgets import (
     QLabel,
     QMessageBox,
     QSlider,
-    QListWidget,
-    QListWidgetItem,
-    QCheckBox,
     QLineEdit,
     QRadioButton,
     QButtonGroup,
     QGroupBox,
+    QSizePolicy,
 )
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
-from PyQt6.QtCore import QUrl, QTimer, Qt
+from PyQt6.QtCore import QUrl, QTimer, Qt, QSettings, QEvent
+from PyQt6.QtGui import QKeySequence, QAction, QFont
 from anki_slicer.subs import SubtitleEntry
+from anki_slicer.segment_adjuster import SegmentAdjusterWidget
 import tempfile
 import os
 
@@ -31,29 +31,35 @@ class PlayerUI(QWidget):
         super().__init__()
         self.setWindowTitle("Anki-slicer Player")
         self.setMinimumSize(950, 650)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         self.mp3_path = mp3_path
         self.orig_entries = orig_entries
         self.trans_entries = trans_entries
         self.current_index = 0
-        self.flagged = []
 
         # State
         self.auto_pause_mode = False
         self.slider_active = False
         self.pending_index = None
         self.waiting_for_resume = False
+        self.card_created_for_current_segment = False
+        self.is_adjusted_preview = False  # track preview vs normal pause
+
+        # More wiggle room around each subtitle
+        self.MARGIN_SEC = 1.0
 
         # For search
-        self.search_matches = []
+        self.search_matches: list[int] = []
         self.search_index = 0
 
         # Player setup
         self.player = QMediaPlayer()
         self.audio_output = QAudioOutput()
+        self.audio_output.setVolume(1.0)
         self.player.setAudioOutput(self.audio_output)
 
-        # Temp audio conversion
+        # Convert to wav for stable playback
         from pydub import AudioSegment
 
         self._tmp_wav = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
@@ -62,25 +68,80 @@ class PlayerUI(QWidget):
         audio.export(self._tmp_wav.name, format="wav")
         self.player.setSource(QUrl.fromLocalFile(self._tmp_wav.name))
 
-        # Timer for subtitle sync
+        # Timers
         self.timer = QTimer()
         self.timer.setInterval(100)
         self.timer.timeout.connect(self.update_subtitles)
 
+        # Single-shot timer for stopping at end of range
+        self.auto_pause_timer = QTimer(self)
+        self.auto_pause_timer.setSingleShot(True)
+        self.auto_pause_timer.timeout.connect(self._auto_pause_hit)
+
         # Slider signals
         self.player.positionChanged.connect(self.update_slider)
         self.player.durationChanged.connect(self.update_duration)
-
         self.total_duration = 0
+
+        # Settings
+        self.settings = QSettings("AnkiSlicer", "PlayerUI")
 
         # Build UI
         self.setup_ui()
         self.timer.start()
 
+        # Keyboard shortcut for Play/Pause (space bar)
+        self.play_action = QAction("Play/Pause", self)
+        self.play_action.setShortcut(QKeySequence("Space"))
+        self.play_action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
+        self.play_action.triggered.connect(self.toggle_play)
+        self.addAction(self.play_action)
+
+        # Initialize waveform with the first subtitle segment (with margin)
+        if self.orig_entries:
+            entry0 = self.orig_entries[0]
+            raw_start = max(0.0, entry0.start_time - self.MARGIN_SEC)
+            raw_end = entry0.end_time + self.MARGIN_SEC
+            self.adjuster.set_bounds_and_selection(
+                raw_start, raw_end, entry0.start_time, entry0.end_time
+            )
+
+        # Waveform click-to-preview
+        self.adjuster.installEventFilter(self)
+
     def setup_ui(self):
         layout = QVBoxLayout()
 
-        # Headers
+        # === Search controls ===
+        search_row = QHBoxLayout()
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Search subtitles...")
+        self.search_btn = QPushButton("Search")
+        self.search_btn.clicked.connect(self.run_search)
+        self.next_match_btn = QPushButton("Next Match")
+        self.next_match_btn.clicked.connect(self.next_match)
+        search_row.addWidget(self.search_input)
+        search_row.addWidget(self.search_btn)
+        search_row.addWidget(self.next_match_btn)
+        layout.addLayout(search_row)
+
+        # === Search Scope ===
+        scope_group_box = QGroupBox("Search Scope")
+        scope_layout = QHBoxLayout()
+        self.scope_group = QButtonGroup(self)
+        self.radio_orig = QRadioButton("Original")
+        self.radio_trans = QRadioButton("Translation")
+        self.radio_both = QRadioButton("Both")
+        self.radio_both.setChecked(True)
+        for rb in (self.radio_orig, self.radio_trans, self.radio_both):
+            self.scope_group.addButton(rb)
+            scope_layout.addWidget(rb)
+        scope_group_box.setLayout(scope_layout)
+        layout.addWidget(scope_group_box)
+
+        # === Subtitle displays ===
+        base_style = "font-size: 16px; padding: 10px; border: 1px solid #ccc;"
+
         orig_title = QLabel("Original")
         orig_title.setStyleSheet(
             "font-size: 18px; font-weight: bold; margin-top: 10px;"
@@ -90,119 +151,213 @@ class PlayerUI(QWidget):
             "font-size: 18px; font-weight: bold; margin-top: 10px;"
         )
 
-        # Subtitle displays
         self.orig_label = QLabel("(waiting for audio...)")
-        self.orig_label.setWordWrap(True)
-        self.orig_label.setStyleSheet(
-            "font-size: 14px; padding: 10px; border: 1px solid #ccc;"
+        self.orig_label.setWordWrap(False)  # single line
+        self.orig_label.setStyleSheet(base_style)
+        self.orig_label.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
         )
+
         self.trans_label = QLabel("(waiting for audio...)")
         self.trans_label.setWordWrap(True)
-        self.trans_label.setStyleSheet(
-            "font-size: 14px; padding: 10px; border: 1px solid #ccc;"
+        self.trans_label.setStyleSheet(base_style)
+        self.trans_label.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
         )
+
+        # Fix heights: Original ~1 line; Translation ~6 lines
+        fm = self.orig_label.fontMetrics()
+        line_h = fm.lineSpacing()
+        self.orig_label.setFixedHeight(int(line_h + 20))  # 1 line + padding
+        self.trans_label.setFixedHeight(int(line_h * 6 + 20))  # ~6 lines + padding
 
         layout.addWidget(orig_title)
         layout.addWidget(self.orig_label)
         layout.addWidget(trans_title)
         layout.addWidget(self.trans_label)
 
-        # Slider + time
+        # === Slider + time ===
         slider_row = QHBoxLayout()
         self.pos_slider = QSlider(Qt.Orientation.Horizontal)
         self.pos_slider.setRange(0, 0)
         self.pos_slider.sliderMoved.connect(self.seek)
         self.pos_slider.sliderPressed.connect(self.on_slider_pressed)
         self.pos_slider.sliderReleased.connect(self.on_slider_released)
-
         self.time_label = QLabel("00:00 / 00:00")
         slider_row.addWidget(self.pos_slider, stretch=1)
         slider_row.addWidget(self.time_label)
         layout.addLayout(slider_row)
 
-        # Controls
+        # === Playback controls ===
+        # Swap positions: Back on the left, Forward on the right.
         controls = QHBoxLayout()
-        self.play_btn = QPushButton("Play")
-        self.play_btn.clicked.connect(self.toggle_play)
-
-        self.prev_btn = QPushButton("Previous")
-        self.prev_btn.clicked.connect(self.previous_subtitle)
-
-        self.next_btn = QPushButton("Next")
-        self.next_btn.clicked.connect(self.next_subtitle)
-
-        self.flag_btn = QPushButton("Flag for Anki")
-        self.flag_btn.clicked.connect(self.flag_current)
-
+        self.back_btn = QPushButton("Back")
+        self.back_btn.clicked.connect(self.back_to_previous)
+        self.forward_btn = QPushButton("Forward")
+        self.forward_btn.clicked.connect(self.forward_to_next)
         self.mode_btn = QPushButton("Mode: Continuous")
         self.mode_btn.setCheckable(True)
         self.mode_btn.clicked.connect(self.toggle_mode)
-
-        controls.addWidget(self.play_btn)
-        controls.addWidget(self.prev_btn)
-        controls.addWidget(self.next_btn)
-        controls.addWidget(self.flag_btn)
+        controls.addWidget(self.back_btn)
+        controls.addWidget(self.forward_btn)
         controls.addWidget(self.mode_btn)
         layout.addLayout(controls)
 
-        # Progress
+        # === Progress ===
         self.progress_label = QLabel(f"Subtitle 1 of {len(self.orig_entries)}")
         layout.addWidget(self.progress_label)
 
-        # === Search controls ===
-        search_row = QHBoxLayout()
-        self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Search subtitles...")
-        self.search_btn = QPushButton("Search")
-        self.search_btn.clicked.connect(self.run_search)
-        self.next_match_btn = QPushButton("Next")
-        self.next_match_btn.clicked.connect(self.next_match)
-        self.flag_all_btn = QPushButton("Flag All Matches")
-        self.flag_all_btn.clicked.connect(self.flag_all_matches)
+        # === Waveform widget ===
+        self.adjuster = SegmentAdjusterWidget(self.mp3_path, self.player)
+        self.adjuster.setFixedHeight(160)
+        layout.addWidget(self.adjuster)
 
-        search_row.addWidget(self.search_input)
-        search_row.addWidget(self.search_btn)
-        search_row.addWidget(self.next_match_btn)
-        search_row.addWidget(self.flag_all_btn)
-        layout.addLayout(search_row)
+        # === Segment adjustment controls ===
+        segment_controls_row = QHBoxLayout()
+        segment_controls_row.setSpacing(10)
 
-        # === Search Scope (grouped in QGroupBox) ===
-        scope_group_box = QGroupBox("Search Scope")
-        scope_layout = QHBoxLayout()
+        start_label = QLabel("Adjust Start:")
+        start_label.setStyleSheet("font-weight: bold;")
+        self.start_minus = QPushButton("−")
+        self.start_plus = QPushButton("+")
+        for btn in (self.start_minus, self.start_plus):
+            btn.setFixedSize(32, 32)
+            btn.setStyleSheet("font-size: 16px; font-weight: bold;")
+        segment_controls_row.addWidget(start_label)
+        segment_controls_row.addWidget(self.start_minus)
+        segment_controls_row.addWidget(self.start_plus)
 
-        self.scope_group = QButtonGroup(self)
-        self.radio_orig = QRadioButton("Original")
-        self.radio_trans = QRadioButton("Translation")
-        self.radio_both = QRadioButton("Both")
-        self.radio_both.setChecked(True)
+        segment_controls_row.addStretch(1)
 
-        for rb in [self.radio_orig, self.radio_trans, self.radio_both]:
-            self.scope_group.addButton(rb)
-            scope_layout.addWidget(rb)
+        end_label = QLabel("Adjust End:")
+        end_label.setStyleSheet("font-weight: bold;")
+        self.end_minus = QPushButton("−")
+        self.end_plus = QPushButton("+")
+        for btn in (self.end_minus, self.end_plus):
+            btn.setFixedSize(32, 32)
+            btn.setStyleSheet("font-size: 16px; font-weight: bold;")
+        segment_controls_row.addWidget(end_label)
+        segment_controls_row.addWidget(self.end_minus)
+        segment_controls_row.addWidget(self.end_plus)
 
-        scope_group_box.setLayout(scope_layout)
-        layout.addWidget(scope_group_box)
+        layout.addLayout(segment_controls_row)
 
-        # === Flagged Segments box ===
-        self.flagged_list = QListWidget()
-        self.flagged_list.setFixedHeight(180)
-        layout.addWidget(QLabel("Flagged Segments"))
-        layout.addWidget(self.flagged_list)
+        # Connect nudges
+        self.start_minus.clicked.connect(lambda: self.nudge_segment("start", -0.05))
+        self.start_plus.clicked.connect(lambda: self.nudge_segment("start", +0.05))
+        self.end_minus.clicked.connect(lambda: self.nudge_segment("end", -0.05))
+        self.end_plus.clicked.connect(lambda: self.nudge_segment("end", +0.05))
 
-        btn_row = QHBoxLayout()
-        self.export_btn = QPushButton("Export Selection to Anki")
-        self.export_btn.clicked.connect(self.export_to_anki)
-        self.clear_btn = QPushButton("Clear All")
-        self.clear_btn.clicked.connect(self.clear_flagged_items)
-        btn_row.addWidget(self.export_btn)
-        btn_row.addWidget(self.clear_btn)
-        layout.addLayout(btn_row)
+        # === Anki controls ===
+        anki_controls_row = QHBoxLayout()
+        self.anki_deck_label = QLabel("Anki Deck:")
+        self.anki_deck_input = QLineEdit()
+        self.anki_deck_input.setText(
+            self.settings.value("anki_deck_name", "AnkiSlicer")
+        )
+        self.anki_deck_input.textChanged.connect(self.save_anki_deck_name)
+        self.create_card_btn = QPushButton("Create Anki Card")
+        self.set_create_button_enabled(False)
+        anki_controls_row.addWidget(self.anki_deck_label)
+        anki_controls_row.addWidget(self.anki_deck_input, stretch=1)
+        anki_controls_row.addStretch(1)
+        anki_controls_row.addWidget(self.create_card_btn)
+        layout.addLayout(anki_controls_row)
+
+        self.create_card_btn.clicked.connect(self.create_anki_card)
 
         self.setLayout(layout)
         self.update_subtitle_display()
 
+    # Styled enable/disable for the Create button
+    def set_create_button_enabled(self, enabled: bool):
+        self.create_card_btn.setEnabled(enabled)
+        if enabled:
+            self.create_card_btn.setStyleSheet(
+                "background-color: #2ecc71; color: white; font-weight: bold;"
+            )
+        else:
+            self.create_card_btn.setStyleSheet(
+                "background-color: #cccccc; color: #666666;"
+            )
+
+    # === Helper methods for audio export ===
+    def _sanitize_filename(self, name: str) -> str:
+        safe = "".join(
+            ch if ch.isalnum() or ch in (" ", "-", "_") else "_" for ch in name
+        )
+        safe = "_".join(safe.split())
+        return safe[:80] if safe else "clip"
+
+    def _export_clip_fallback(
+        self, out_dir: str, start_sec: float, end_sec: float, index_for_name: int
+    ) -> str:
+        from pydub import AudioSegment
+
+        os.makedirs(out_dir, exist_ok=True)
+        audio = AudioSegment.from_file(self.mp3_path)
+        s = max(0, int(start_sec * 1000))
+        e = max(s + 10, int(end_sec * 1000))
+        base = f"{index_for_name:04d}_{int(start_sec*1000)}-{int(end_sec*1000)}"
+        base = self._sanitize_filename(base)
+        out_path = os.path.abspath(os.path.join(out_dir, base + ".mp3"))
+        audio[s:e].export(out_path, format="mp3")
+        return out_path
+
+    # === Segment Adjustment Helper ===
+    def nudge_segment(self, which: str, delta: float):
+        start, end = self.adjuster.get_adjusted_segment()
+        raw_start, raw_end = self.adjuster.raw_start, self.adjuster.raw_end
+
+        if which == "start":
+            if delta < 0:
+                new_start = min(end - 0.1, start + abs(delta))
+            else:
+                new_start = max(raw_start, start - abs(delta))
+            self.adjuster.adj_start = new_start
+
+        elif which == "end":
+            if delta < 0:
+                new_end = max(start + 0.1, end - abs(delta))
+            else:
+                new_end = min(raw_end, end + abs(delta))
+            self.adjuster.adj_end = new_end
+
+        self.adjuster.adj_start = max(
+            raw_start, min(self.adjuster.adj_start, self.adjuster.adj_end - 0.05)
+        )
+        self.adjuster.adj_end = min(
+            raw_end, max(self.adjuster.adj_end, self.adjuster.adj_start + 0.05)
+        )
+        self.adjuster.update()
+
+        self.card_created_for_current_segment = False
+        self.set_create_button_enabled(True)
+
+        self.play_adjusted_segment()
+
+    def play_adjusted_segment(self):
+        start, end = self.adjuster.get_adjusted_segment()
+        self.auto_pause_timer.stop()
+        self.is_adjusted_preview = True
+
+        self.player.setPosition(int(start * 1000))
+        self.player.play()
+
+        duration_ms = max(0, int((end - start) * 1000))
+        self.auto_pause_timer.start(duration_ms)
+
     # === Playback + Subtitles ===
     def find_subtitle_index(self, position_sec: float) -> int:
+        if not self.orig_entries:
+            return 0
+        # Before first subtitle starts -> index 0
+        if position_sec <= self.orig_entries[0].start_time:
+            return 0
+        # After last subtitle ends -> last index
+        if position_sec >= self.orig_entries[-1].end_time:
+            return len(self.orig_entries) - 1
+
         for i, entry in enumerate(self.orig_entries):
             if entry.start_time <= position_sec <= entry.end_time:
                 return i
@@ -210,28 +365,34 @@ class PlayerUI(QWidget):
                 nxt = self.orig_entries[i + 1]
                 if entry.end_time < position_sec < nxt.start_time:
                     return i
-        return len(self.orig_entries) - 1
+        return 0  # safe fallback
 
     def update_subtitles(self):
-        if self.slider_active:
+        # Don't change subtitle index during adjusted previews
+        if self.slider_active or self.is_adjusted_preview:
             return
         position_sec = self.player.position() / 1000.0
-        if self.auto_pause_mode:
-            if not self.waiting_for_resume:
-                current_entry = self.orig_entries[self.current_index]
-                if position_sec >= current_entry.end_time:
-                    self.pending_index = min(
-                        self.current_index + 1, len(self.orig_entries) - 1
-                    )
-                    self.player.pause()
-                    self.play_btn.setText("Play")
-                    self.waiting_for_resume = True
-            return
-        else:
-            new_index = self.find_subtitle_index(position_sec)
-            if new_index != self.current_index:
-                self.current_index = new_index
-                self.update_subtitle_display()
+        new_index = self.find_subtitle_index(position_sec)
+        if new_index != self.current_index:
+            self.current_index = new_index
+            self.update_subtitle_display()
+
+    def show_current_segment_in_adjuster(self):
+        entry = self.orig_entries[self.current_index]
+        total_sec = max(0.0, (self.total_duration or 0) / 1000.0)
+
+        margin = float(self.MARGIN_SEC)
+        raw_start = max(0.0, entry.start_time - margin)
+        raw_end = entry.end_time + margin
+        if total_sec > 0:
+            raw_end = min(raw_end, total_sec)
+
+        self.adjuster.set_bounds_and_selection(
+            raw_start, raw_end, entry.start_time, entry.end_time
+        )
+
+        self.card_created_for_current_segment = False
+        self.set_create_button_enabled(True)
 
     def update_subtitle_display(self):
         orig_entry = self.orig_entries[self.current_index]
@@ -247,19 +408,147 @@ class PlayerUI(QWidget):
         self.progress_label.setText(
             f"Subtitle {self.current_index + 1} of {len(self.orig_entries)}"
         )
+        self.show_current_segment_in_adjuster()
 
+        self.card_created_for_current_segment = False
+        self.set_create_button_enabled(True)
+
+    # Spacebar play/pause
     def toggle_play(self):
         if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            self.auto_pause_timer.stop()
             self.player.pause()
-            self.play_btn.setText("Play")
-        else:
-            if self.waiting_for_resume and self.pending_index is not None:
-                self.current_index = self.pending_index
-                self.pending_index = None
-                self.update_subtitle_display()
-                self.waiting_for_resume = False
-            self.player.play()
-            self.play_btn.setText("Pause")
+            self.show_current_segment_in_adjuster()
+            return
+
+        # Resume or start at current subtitle start
+        if self.waiting_for_resume and self.pending_index is not None:
+            self.current_index = self.pending_index
+            self.pending_index = None
+            self.update_subtitle_display()
+            self.waiting_for_resume = False
+            entry = self.orig_entries[self.current_index]
+            self.player.setPosition(int(entry.start_time * 1000))
+        elif not self.is_adjusted_preview:
+            entry = self.orig_entries[self.current_index]
+            self.player.setPosition(int(entry.start_time * 1000))
+
+        self.player.play()
+
+        # Schedule auto-pause if enabled
+        if self.auto_pause_mode:
+            entry = self.orig_entries[self.current_index]
+            remaining_ms = max(0, int(entry.end_time * 1000 - self.player.position()))
+            self.auto_pause_timer.stop()
+            self.auto_pause_timer.start(remaining_ms)
+
+    def _auto_pause_hit(self):
+        self.player.pause()
+
+        if self.is_adjusted_preview:
+            self.is_adjusted_preview = False
+            return
+
+        self.pending_index = min(self.current_index + 1, len(self.orig_entries) - 1)
+        self.waiting_for_resume = True
+
+    # Mode toggle: enforce immediate scheduling if already playing
+    def toggle_mode(self):
+        self.auto_pause_mode = self.mode_btn.isChecked()
+        self.mode_btn.setText(
+            "Mode: Auto‑Pause" if self.auto_pause_mode else "Mode: Continuous"
+        )
+
+        self.auto_pause_timer.stop()
+        if (
+            self.auto_pause_mode
+            and self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
+        ):
+            pos_sec = self.player.position() / 1000.0
+            self.current_index = self.find_subtitle_index(pos_sec)
+            entry = self.orig_entries[self.current_index]
+            remaining_ms = max(0, int(entry.end_time * 1000 - self.player.position()))
+            self.auto_pause_timer.start(remaining_ms)
+
+    # === Forward/Back ===
+    def forward_to_next(self):
+        # If we haven't started yet (at t=0 on first item), play the first subtitle
+        if (
+            self.current_index == 0
+            and self.player.playbackState() != QMediaPlayer.PlaybackState.PlayingState
+            and self.pos_slider.value() == 0
+        ):
+            self.jump_to_current_subtitle_and_play()
+            return
+
+        if self.current_index < len(self.orig_entries) - 1:
+            self.current_index += 1
+        self.jump_to_current_subtitle_and_play()
+
+    def back_to_previous(self):
+        if self.current_index > 0:
+            self.current_index -= 1
+        self.jump_to_current_subtitle_and_play()
+
+    def jump_to_current_subtitle_and_play(self):
+        entry = self.orig_entries[self.current_index]
+        self.player.setPosition(int(entry.start_time * 1000))
+        self.update_subtitle_display()
+        self.waiting_for_resume = False
+        self.player.play()
+        self.card_created_for_current_segment = False
+        self.set_create_button_enabled(True)
+
+        if self.auto_pause_mode:
+            self.auto_pause_timer.stop()
+            remaining_ms = max(0, int(entry.end_time * 1000 - self.player.position()))
+            self.auto_pause_timer.start(remaining_ms)
+
+    # === Slider ===
+    def on_slider_pressed(self):
+        self.slider_active = True
+
+    def on_slider_released(self):
+        self.slider_active = False
+        pos = self.pos_slider.value()
+        self.player.setPosition(pos)
+        self.current_index = self.find_subtitle_index(pos / 1000.0)
+        self.update_subtitle_display()
+        self.waiting_for_resume = False
+        self.show_current_segment_in_adjuster()
+
+        self.card_created_for_current_segment = False
+        self.set_create_button_enabled(True)
+
+        self.auto_pause_timer.stop()
+        if (
+            self.auto_pause_mode
+            and self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
+        ):
+            entry = self.orig_entries[self.current_index]
+            remaining_ms = max(0, int(entry.end_time * 1000 - self.player.position()))
+            self.auto_pause_timer.start(remaining_ms)
+
+    def update_slider(self, pos):
+        if not self.pos_slider.isSliderDown():
+            self.pos_slider.setValue(pos)
+        self.time_label.setText(
+            f"{self.format_time(pos)} / {self.format_time(self.total_duration)}"
+        )
+
+    def update_duration(self, dur):
+        self.total_duration = dur
+        self.pos_slider.setRange(0, dur)
+        self.show_current_segment_in_adjuster()
+
+    def seek(self, pos):
+        self.player.setPosition(pos)
+
+    @staticmethod
+    def format_time(ms: int) -> str:
+        seconds = ms // 1000
+        m, s = divmod(seconds, 60)
+        return f"{m}:{s:02}"
 
     # === Search Features ===
     def run_search(self):
@@ -297,148 +586,90 @@ class PlayerUI(QWidget):
         self.player.setPosition(int(entry.start_time * 1000))
         self.update_subtitle_display()
         self.search_index = (self.search_index + 1) % len(self.search_matches)
+        self.show_current_segment_in_adjuster()
+
+        self.card_created_for_current_segment = False
+        self.set_create_button_enabled(True)
 
     def next_match(self):
         self.jump_to_match()
 
-    def flag_all_matches(self):
-        if not self.search_matches:
-            QMessageBox.information(self, "No Matches", "Run a search first.")
-            return
-        for idx in self.search_matches:
-            self.current_index = idx
-            self.flag_current()
-
-    # === Flagging ===
-    def flag_current(self):
-        entry = self.orig_entries[self.current_index]
-        if entry not in self.flagged:
-            self.flagged.append(entry)
-            start_time = self.format_time(int(entry.start_time * 1000))
-            orig_snip = " ".join(entry.text.split()[:4]) + (
-                "..." if len(entry.text.split()) > 4 else ""
+    # === Anki Card Creation ===
+    def create_anki_card(self):
+        if self.card_created_for_current_segment:
+            QMessageBox.information(
+                self,
+                "Already Created",
+                "An Anki card has already been created for this segment. Play to a new segment to enable the button.",
             )
-            trans = (
-                self.trans_entries[entry.index - 1]
-                if entry.index <= len(self.trans_entries)
-                else None
-            )
-            trans_snip = ""
-            if trans:
-                trans_snip = " / " + " ".join(trans.text.split()[:4])
-                if len(trans.text.split()) > 4:
-                    trans_snip += "..."
-            line = f"{start_time} {orig_snip}{trans_snip}"
-            item = QListWidgetItem()
-            checkbox = QCheckBox(line)
-            checkbox.setChecked(True)
-            self.flagged_list.addItem(item)
-            self.flagged_list.setItemWidget(item, checkbox)
-
-    def clear_flagged_items(self):
-        self.flagged.clear()
-        self.flagged_list.clear()
-
-    # === Export ===
-    def export_to_anki(self):
-        if self.flagged_list.count() == 0:
-            QMessageBox.warning(self, "No Flags", "No flagged items to export!")
             return
+
+        current_entry = self.orig_entries[self.current_index]
+        trans_entry = (
+            self.trans_entries[self.current_index]
+            if self.current_index < len(self.trans_entries)
+            else None
+        )
+
+        start_sec, end_sec = self.adjuster.get_adjusted_segment()
+
         from anki_slicer.slicer import slice_audio
         from anki_slicer.ankiconnect import AnkiConnect
 
         anki = AnkiConnect()
-        anki.ensure_deck()
+        deck_name = self.anki_deck_input.text().strip() or "AnkiSlicer"
+        anki.ensure_deck(deck_name)
+
         out_dir = "anki_clips"
-        exported, skipped = 0, 0
-        for i in range(self.flagged_list.count()):
-            item = self.flagged_list.item(i)
-            widget = self.flagged_list.itemWidget(item)
-            if (
-                isinstance(widget, QCheckBox)
-                and widget.isChecked()
-                and widget.isEnabled()
-            ):
-                entry = self.flagged[i]
-                trans = (
-                    self.trans_entries[entry.index - 1]
-                    if entry.index <= len(self.trans_entries)
-                    else None
+        os.makedirs(out_dir, exist_ok=True)
+
+        try:
+            clip_path = slice_audio(
+                self.mp3_path,
+                current_entry,
+                out_dir,
+                override_start=start_sec,
+                override_end=end_sec,
+            )
+            clip_path = os.path.abspath(clip_path)
+
+            if not os.path.exists(clip_path):
+                clip_path = self._export_clip_fallback(
+                    out_dir, start_sec, end_sec, self.current_index + 1
                 )
-                clip_path = slice_audio(self.mp3_path, entry, out_dir)
-                try:
-                    anki.add_note(
-                        entry.text,
-                        trans.text if trans else "(no translation)",
-                        clip_path,
-                    )
-                    exported += 1
-                except Exception as e:
-                    if "duplicate" in str(e).lower():
-                        skipped += 1
-                    else:
-                        raise
-                widget.setEnabled(False)
-        QMessageBox.information(
-            self,
-            "Export Done",
-            f"Exported {exported} notes. Skipped {skipped} duplicates.",
-        )
 
-    # === Navigation ===
-    def previous_subtitle(self):
-        if self.current_index > 0:
-            self.current_index -= 1
-            self.jump_to_current_subtitle()
+            if not os.path.exists(clip_path):
+                raise FileNotFoundError(f"Clip not found after slicing: {clip_path}")
 
-    def next_subtitle(self):
-        if self.current_index < len(self.orig_entries) - 1:
-            self.current_index += 1
-            self.jump_to_current_subtitle()
+            anki.add_note(
+                current_entry.text,
+                trans_entry.text if trans_entry else "(no translation)",
+                clip_path,
+                deck_name=deck_name,
+            )
+            QMessageBox.information(
+                self,
+                "Card Created",
+                f"Anki card created for segment {self.current_index + 1} in deck '{deck_name}'.",
+            )
+            self.card_created_for_current_segment = True
+            self.set_create_button_enabled(False)
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Anki Error",
+                f"Failed to create Anki card: {e}. Is AnkiConnect running?",
+            )
 
-    def jump_to_current_subtitle(self):
-        entry = self.orig_entries[self.current_index]
-        self.player.setPosition(int(entry.start_time * 1000))
-        self.update_subtitle_display()
-        self.waiting_for_resume = False
+    def save_anki_deck_name(self):
+        self.settings.setValue("anki_deck_name", self.anki_deck_input.text().strip())
 
-    def toggle_mode(self):
-        self.auto_pause_mode = self.mode_btn.isChecked()
-        self.mode_btn.setText(
-            "Mode: Auto‑Pause" if self.auto_pause_mode else "Mode: Continuous"
-        )
-
-    # === Slider ===
-    def on_slider_pressed(self):
-        self.slider_active = True
-
-    def on_slider_released(self):
-        self.slider_active = False
-        pos = self.pos_slider.value()
-        self.player.setPosition(pos)
-        self.current_index = self.find_subtitle_index(pos / 1000.0)
-        self.update_subtitle_display()
-        self.waiting_for_resume = False
-
-    def update_slider(self, pos):
-        if not self.pos_slider.isSliderDown():
-            self.pos_slider.setValue(pos)
-        self.time_label.setText(
-            f"{self.format_time(pos)} / {self.format_time(self.total_duration)}"
-        )
-
-    def update_duration(self, dur):
-        self.total_duration = dur
-        self.pos_slider.setRange(0, dur)
-
-    def seek(self, pos):
-        self.player.setPosition(pos)
-
-    @staticmethod
-    def format_time(ms: int) -> str:
-        seconds = ms // 1000
-        m, s = divmod(seconds, 60)
-        return f"{m}:{s:02}"
+    # === Waveform click-to-preview via event filter ===
+    def eventFilter(self, obj, event):  # type: ignore[override]
+        if obj is self.adjuster and event.type() == QEvent.Type.MouseButtonPress:
+            self.play_adjusted_segment()
+            return True
+        return super().eventFilter(obj, event)
 
     # === Cleanup ===
     def closeEvent(self, event):  # type: ignore[override]

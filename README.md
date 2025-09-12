@@ -21,7 +21,6 @@ It’s designed for language learners who want to build rich, sentence‑level l
 
 💡 Tip: I personally use McWhisper (paid app) to generate accurate SRTs and export audio from YouTube or audio files. Other workflows are possible — e.g. extracting captions from YouTube, generating with whisper.AI, etc.
 
-🚀 Installation
 
 ## 🚀 Installation
 
@@ -64,6 +63,8 @@ pip install -e .
     Click Create Anki Card → card is created in your AnkiSlicer deck. You can specify the name of the Anki deck. If a deck with that name doesn't exist it will be created. 
 
 🖼 UI Preview
+
+<img width="938" height="789" alt="SCR-20250912-gpjp" src="https://github.com/user-attachments/assets/93ab84f6-2e16-44ae-a6b4-defb1b1a0a47" />
 
 Anki-Slicer Screenshot
 🛠 Tip

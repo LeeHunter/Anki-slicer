@@ -36,7 +36,8 @@ git clone https://github.com/LeeHunter/anki-slicer.git
 cd anki-slicer
 pip install -e .
 
-
+##UI Preview
+![Anki-Slicer screenshot](images/SCR-20250912-gpjp.png)
 
 
 🎮 How to Use Anki‑Slicer
@@ -63,8 +64,7 @@ pip install -e .
     Click Create Anki Card → card is created in your AnkiSlicer deck. You can specify the name of the Anki deck.
     If a deck with that name doesn't exist it will be created. 
 
-##UI Preview
-![Anki-Slicer screenshot](images/SCR-20250912-gpjp.png)
+
 
 🛠 Tip
 

@@ -1,5 +1,9 @@
 🎧 Anki‑Slicer
 
+[![PyPI version](https://img.shields.io/pypi/v/anki-slicer.svg)](https://pypi.org/project/anki-slicer/)
+[![Python versions](https://img.shields.io/pypi/pyversions/anki-slicer.svg)](https://pypi.org/project/anki-slicer/)
+[![License](https://img.shields.io/github/license/leehunter/Anki-slicer)](LICENSE)
+
 Anki‑Slicer is a utility that lets you take an audio file (MP3, WAV, etc.) plus two SRT subtitles (original + translation), preview and flag sentences you want to learn, and then export it into an Anki flashcard deck — fully synchronized with the audio.
 
 It’s designed for language learners who want to build rich, sentence‑level listening cards with audio + text, all in just a few clicks.
@@ -36,11 +40,11 @@ git clone https://github.com/LeeHunter/anki-slicer.git
 cd anki-slicer
 pip install -e .
 
-##UI Preview
+## Preview
 ![Anki-Slicer screenshot](images/SCR-20250912-gpjp.png)
 
 
-🎮 How to Use Anki‑Slicer
+## Usage
 
    In a terminal run the following command: python -m anki_slicer
 

@@ -64,7 +64,7 @@ pip install -e .
 
 🖼 UI Preview
 
-<img width="938" height="789" alt="Image" src="https://github.com/user-attachments/assets/c13ba5cb-5a14-4a84-bafa-4e545934db9f" />
+![Anki-Slicer Player UI](images/SCR-20250912-gpjp.png)
 
 Anki-Slicer Screenshot
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "anki-slicer"
-version = "0.2.0"
+version = "0.3.1"
 description = "Slice audio + subtitles and export to Anki via AnkiConnect"
 authors = [
     { name = "Lee Hunter", email = "you@example.com" }

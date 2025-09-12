@@ -18,11 +18,11 @@ It’s designed for language learners who want to build rich, sentence‑level f
 
 ## 📦 Prerequisites
 
-Python 3.9 or later
-[Anki](https://apps.ankiweb.net/) with the AnkiConnect add‑on installed and running.
-An audio file and two SRT files:
-Original transcript (same language as the audio).
-Translation of the original text.
+* Python 3.9 or later
+* [Anki](https://apps.ankiweb.net/) with the AnkiConnect add‑on installed and running.
+* An audio file and two SRT files:
+    * Original transcript (same language as the audio).
+    * Translation of the original text.*
 
 💡 Tip: I personally use McWhisper (paid app) which can generate accurate SRTs (original and translation) and then export  the audio from YouTube videos etc. Other workflows are possible — e.g. extracting captions from YouTube, generating with whisper.AI, etc.
 

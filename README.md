@@ -60,7 +60,8 @@ pip install -e .
         =/- buttons for precise editing of the selection length
         
     
-    Click Create Anki Card → card is created in your AnkiSlicer deck. You can specify the name of the Anki deck. If a deck with that name doesn't exist it will be created. 
+    Click Create Anki Card → card is created in your AnkiSlicer deck. You can specify the name of the Anki deck.
+    If a deck with that name doesn't exist it will be created. 
 
 ##UI Preview
 ![Anki-Slicer screenshot](images/SCR-20250912-gpjp.png)

@@ -64,7 +64,7 @@ pip install -e .
 
 🖼 UI Preview
 
-![Anki-Slicer Player UI](images/SCR-20250912-gpjp.png)
+![Anki-Slicer Player UI](https://raw.githubusercontent.com/leehunter/Anki-slicer/main/images/SCR-20250912-gpjp.png)
 
 Anki-Slicer Screenshot
 

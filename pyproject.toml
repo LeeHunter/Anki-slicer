@@ -4,30 +4,44 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "anki-slicer"
-version = "0.3.1"
-description = "Slice audio + subtitles and export to Anki via AnkiConnect"
-authors = [
-    { name = "Lee Hunter", email = "you@example.com" }
-]
-license = { text = "MIT" }
+version = "0.3.2"  # ⬅️ bump this every release (PyPI enforces immutability)
+description = "Slice audio and subtitles into Anki cards for language learning"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.8"
+license = { text = "MIT" }
 
-# Main dependencies
-dependencies = [
-    "pydub>=0.25.1",
-    "PyQt6>=6.6.0",
-    "requests>=2.31.0",
-    "numpy>=1.26.0",
-    "matplotlib>=3.7.0"
+authors = [
+  { name = "Lee Hunter" }
 ]
 
-[project.urls]
-Homepage = "https://github.com/leehunter/anki-slicer"
-Issues = "https://github.com/leehunter/anki-slicer/issues"
+keywords = [
+  "anki",
+  "anki-connect",
+  "language-learning",
+  "audio",
+  "subtitles",
+  "srt",
+  "anki-deck"
+]
 
-[tool.setuptools.packages.find]
-where = ["."]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Education",
+  "Topic :: Education",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+]
+
+dependencies = [
+  "PyQt6>=6.6.0",
+  "pydub>=0.25.1",
+]
 
 [project.scripts]
-anki-slicer = "anki_slicer.main:main"
+anki-slicer = "anki_slicer.__main__:main"

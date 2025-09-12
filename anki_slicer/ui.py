@@ -4,166 +4,135 @@ from PyQt6.QtWidgets import (
     QLabel,
     QPushButton,
     QFileDialog,
-    QLineEdit,
-    QHBoxLayout,
     QMessageBox,
 )
-from PyQt6.QtCore import pyqtSignal, Qt
-from typing import Union
-import os
-from anki_slicer.config import load_config, save_config
+from PyQt6.QtCore import Qt, QSettings
+from .player import PlayerUI
+from .subs import SRTParser
 
 
 class FileSelectorUI(QWidget):
-    # Emitted when all three files are selected and user clicks Start
-    start_requested = pyqtSignal(str, str, str)  # mp3_path, orig_srt, trans_srt
-
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Anki-slicer")
-        self.setMinimumSize(700, 350)
+        self.setWindowTitle("Anki‑Slicer – Select Files")
+        self.setMinimumSize(400, 200)
 
-        self.mp3_path_edit = QLineEdit()
-        self.orig_srt_edit = QLineEdit()
-        self.trans_srt_edit = QLineEdit()
+        # State for selected paths
+        self.audio_path = None
+        self.orig_srt = None
+        self.trans_srt = None
 
-        # Make path fields read-only; users pick via Browse
-        for e in (self.mp3_path_edit, self.orig_srt_edit, self.trans_srt_edit):
-            e.setReadOnly(True)
+        # Settings object to remember last directory
+        self.settings = QSettings("AnkiSlicer", "FileSelectorUI")
 
-        self.start_button = QPushButton("Start")
-        self.start_button.setEnabled(False)  # enabled only when all files chosen
-        self.start_button.setToolTip(
-            "Please select an MP3/M4A/WAV file and two SRT files to enable Start"
-        )
-        self.start_button.clicked.connect(self.on_start_clicked)
+        layout = QVBoxLayout(self)
 
-        layout = QVBoxLayout()
-        layout.setSpacing(12)
+        # Labels to show chosen files
+        self.audio_label = QLabel("No audio file selected")
+        self.orig_label = QLabel("No original subs selected")
+        self.trans_label = QLabel("No translation subs selected")
 
-        layout.addWidget(QLabel("Choose your files:"))
-        layout.addLayout(self._row("Audio file", self.mp3_path_edit, self._select_mp3))
-        layout.addLayout(
-            self._row(
-                "Original SRT (transcript)", self.orig_srt_edit, self._select_orig_srt
-            )
-        )
-        layout.addLayout(
-            self._row("Translation SRT", self.trans_srt_edit, self._select_trans_srt)
-        )
+        # Browse buttons
+        self.audio_btn = QPushButton("Select Audio file")
+        self.orig_btn = QPushButton("Select Original SRT")
+        self.trans_btn = QPushButton("Select Translation SRT")
 
+        # Start button
+        self.start_btn = QPushButton("Start")
+
+        # Assemble layout
+        layout.addWidget(self.audio_label)
+        layout.addWidget(self.audio_btn)
+        layout.addWidget(self.orig_label)
+        layout.addWidget(self.orig_btn)
+        layout.addWidget(self.trans_label)
+        layout.addWidget(self.trans_btn)
         layout.addStretch(1)
-        layout.addWidget(self.start_button, alignment=Qt.AlignmentFlag.AlignRight)
+        layout.addWidget(self.start_btn)
 
-        self.setLayout(layout)
+        # Connect actions
+        self.audio_btn.clicked.connect(self.select_audio)
+        self.orig_btn.clicked.connect(self.select_orig)
+        self.trans_btn.clicked.connect(self.select_trans)
+        self.start_btn.clicked.connect(self.start_player)
 
-    def _row(self, label_text: str, line_edit: QLineEdit, onclick):
-        row = QHBoxLayout()
-        label = QLabel(label_text + ":")
-        label.setMinimumWidth(190)
+        # Reference for player window
+        self.player = None
 
-        browse_btn = QPushButton("Browse…")
-        browse_btn.clicked.connect(onclick)
+    def _get_last_dir(self) -> str:
+        """Fetch last-used directory from settings (default blank)."""
+        return self.settings.value("last_directory", "")
 
-        row.addWidget(label)
-        row.addWidget(line_edit, stretch=1)
-        row.addWidget(browse_btn)
-        return row
+    def _set_last_dir(self, filepath: str):
+        """Save the directory portion of the given filepath."""
+        if filepath:
+            self.settings.setValue("last_directory", str(filepath.rsplit("/", 1)[0]))
 
-    def _select_mp3(self):
-        options = QFileDialog.Option.DontUseNativeDialog
-        config = load_config()
-        last_dir = config.get("last_dir", "")
-
-        file, _ = QFileDialog.getOpenFileName(
+    def select_audio(self):
+        last_dir = self._get_last_dir()
+        path, _ = QFileDialog.getOpenFileName(
             self,
-            "Select MP3",
+            "Select Audio File",
             last_dir,
-            "Audio Files (*.mp3 *.m4a *.wav)",
-            options=options,
+            "Audio Files (*.mp3 *.wav *.m4a *.flac *.ogg *.aac);;All Files (*)",
         )
-        if file:
-            self.mp3_path_edit.setText(file)
-            config["last_dir"] = os.path.dirname(file)
-            save_config(config)
-            self._update_start_enabled()
+        if path:
+            self.audio_path = path
+            self.audio_label.setText(path)
+            self._set_last_dir(path)
 
-    def _select_orig_srt(self):
-        options = QFileDialog.Option.DontUseNativeDialog
-        config = load_config()
-        last_dir = config.get("last_dir", "")
-
-        file, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select Original SRT",
-            last_dir,
-            "SubRip Files (*.srt)",
-            options=options,
+    def select_orig(self):
+        last_dir = self._get_last_dir()
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select Original Subtitles", last_dir, "Subtitle Files (*.srt)"
         )
-        if file:
-            self.orig_srt_edit.setText(file)
-            config["last_dir"] = os.path.dirname(file)
-            save_config(config)
-            self._update_start_enabled()
+        if path:
+            self.orig_srt = path
+            self.orig_label.setText(path)
+            self._set_last_dir(path)
 
-    def _select_trans_srt(self):
-        options = QFileDialog.Option.DontUseNativeDialog
-        config = load_config()
-        last_dir = config.get("last_dir", "")
-
-        file, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select Translation SRT",
-            last_dir,
-            "SubRip Files (*.srt)",
-            options=options,
+    def select_trans(self):
+        last_dir = self._get_last_dir()
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select Translation Subtitles", last_dir, "Subtitle Files (*.srt)"
         )
-        if file:
-            self.trans_srt_edit.setText(file)
-            config["last_dir"] = os.path.dirname(file)
-            save_config(config)
-            self._update_start_enabled()
+        if path:
+            self.trans_srt = path
+            self.trans_label.setText(path)
+            self._set_last_dir(path)
 
-    def _update_start_enabled(self):
-        ok = all(
-            (
-                self._is_file(self.mp3_path_edit.text(), (".mp3", ".m4a", ".wav")),
-                self._is_file(self.orig_srt_edit.text(), ".srt"),
-                self._is_file(self.trans_srt_edit.text(), ".srt"),
-            )
-        )
-        self.start_button.setEnabled(ok)
-
-        if ok:
-            self.start_button.setToolTip("Click to start Anki-slicer")
-        else:
-            self.start_button.setToolTip(
-                "Please select an MP3/M4A/WAV file and two SRT files to enable Start"
-            )
-
-    @staticmethod
-    def _is_file(path: str, exts: Union[str, tuple[str, ...]]) -> bool:
-        """
-        Check file exists and has extension in exts (string or tuple of allowed endings).
-        """
-        return bool(path) and os.path.isfile(path) and path.lower().endswith(exts)
-
-    def on_start_clicked(self):
-        mp3 = self.mp3_path_edit.text().strip()
-        orig = self.orig_srt_edit.text().strip()
-        trans = self.trans_srt_edit.text().strip()
-
-        # Final sanity checks
-        if (
-            not self._is_file(mp3, (".mp3", ".m4a", ".wav"))
-            or not self._is_file(orig, ".srt")
-            or not self._is_file(trans, ".srt")
-        ):
+    def start_player(self):
+        if not (self.audio_path and self.orig_srt and self.trans_srt):
             QMessageBox.warning(
-                self,
-                "Invalid selection",
-                "Please select a valid audio file and two SRT files.",
+                self, "Missing Files", "Please select all three files before starting."
             )
             return
 
-        self.start_requested.emit(mp3, orig, trans)
+        # Load subtitles using your actual parser
+        try:
+            orig_entries = SRTParser.parse_srt_file(self.orig_srt)
+            trans_entries = SRTParser.parse_srt_file(self.trans_srt)
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Subtitle Error", f"Failed to parse subtitle files:\n{e}"
+            )
+            return
+
+        # Optional: validate alignment
+        is_valid, message = SRTParser.validate_alignment(orig_entries, trans_entries)
+        if not is_valid:
+            reply = QMessageBox.question(
+                self,
+                "Alignment Warning",
+                f"{message}\n\nDo you want to continue anyway?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.No:
+                return
+
+        # Launch PlayerUI (store ref so it doesn't get garbage collected)
+        self.player = PlayerUI(self.audio_path, orig_entries, trans_entries)
+        self.player.show()
+
+        # Optionally: close the file selector window
+        self.close()

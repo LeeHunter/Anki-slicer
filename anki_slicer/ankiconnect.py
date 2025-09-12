@@ -7,6 +7,15 @@ class AnkiConnect:
     def __init__(self, url="http://localhost:8765"):
         self.url = url
 
+    def is_available(self) -> bool:
+        """Return True if AnkiConnect is reachable, else False."""
+        try:
+            # 'version' is a cheap, reliable ping
+            self._invoke("version")
+            return True
+        except Exception:
+            return False
+
     def _invoke(self, action, **params):
         """Send a request to AnkiConnect."""
         request_data = {"action": action, "version": 6, "params": params}

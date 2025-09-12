@@ -17,6 +17,7 @@ from PyQt6.QtCore import QUrl, QTimer, Qt, QSettings, QEvent
 from PyQt6.QtGui import QKeySequence, QAction, QFont
 from anki_slicer.subs import SubtitleEntry
 from anki_slicer.segment_adjuster import SegmentAdjusterWidget
+from anki_slicer.ankiconnect import AnkiConnect
 import tempfile
 import os
 
@@ -108,6 +109,10 @@ class PlayerUI(QWidget):
 
         # Waveform click-to-preview
         self.adjuster.installEventFilter(self)
+
+    def save_anki_deck_name(self, *_):
+        # Accepts the signal’s str arg (or none) without complaining
+        self.settings.setValue("anki_deck_name", self.anki_deck_input.text().strip())
 
     def setup_ui(self):
         layout = QVBoxLayout()
@@ -596,6 +601,34 @@ class PlayerUI(QWidget):
 
     # === Anki Card Creation ===
     def create_anki_card(self):
+        # Local imports to avoid circulars
+        from anki_slicer.ankiconnect import AnkiConnect
+        from anki_slicer.slicer import slice_audio
+        import os
+
+        # 1) Check Anki availability FIRST (show a friendly message if not running)
+        anki = AnkiConnect()
+        try:
+            if hasattr(anki, "is_available"):
+                if not anki.is_available():
+                    QMessageBox.warning(
+                        self,
+                        "Anki Not Running",
+                        "Anki with the Anki-Connect add-on must be running.",
+                    )
+                    return
+            else:
+                # Fallback ping
+                anki._invoke("version")
+        except Exception:
+            QMessageBox.warning(
+                self,
+                "Anki Not Running",
+                "Anki with the Anki-Connect add-on must be running.",
+            )
+            return
+
+        # 2) Prevent double-create for the same segment
         if self.card_created_for_current_segment:
             QMessageBox.information(
                 self,
@@ -604,26 +637,29 @@ class PlayerUI(QWidget):
             )
             return
 
+        # 3) Gather data
         current_entry = self.orig_entries[self.current_index]
         trans_entry = (
             self.trans_entries[self.current_index]
             if self.current_index < len(self.trans_entries)
             else None
         )
-
         start_sec, end_sec = self.adjuster.get_adjusted_segment()
-
-        from anki_slicer.slicer import slice_audio
-        from anki_slicer.ankiconnect import AnkiConnect
-
-        anki = AnkiConnect()
         deck_name = self.anki_deck_input.text().strip() or "AnkiSlicer"
-        anki.ensure_deck(deck_name)
 
-        out_dir = "anki_clips"
-        os.makedirs(out_dir, exist_ok=True)
-
+        # 4) Main operation (single try/except)
         try:
+            # Ensure deck exists
+            if hasattr(anki, "ensure_deck"):
+                anki.ensure_deck(deck_name)
+            else:
+                anki.create_deck(deck_name)
+
+            # Ensure output dir
+            out_dir = "anki_clips"
+            os.makedirs(out_dir, exist_ok=True)
+
+            # Slice audio
             clip_path = slice_audio(
                 self.mp3_path,
                 current_entry,
@@ -633,20 +669,23 @@ class PlayerUI(QWidget):
             )
             clip_path = os.path.abspath(clip_path)
 
+            # Fallback if the slicer didn’t produce a file (rare)
             if not os.path.exists(clip_path):
                 clip_path = self._export_clip_fallback(
                     out_dir, start_sec, end_sec, self.current_index + 1
                 )
-
             if not os.path.exists(clip_path):
                 raise FileNotFoundError(f"Clip not found after slicing: {clip_path}")
 
+            # Add note to Anki
             anki.add_note(
                 current_entry.text,
                 trans_entry.text if trans_entry else "(no translation)",
                 clip_path,
                 deck_name=deck_name,
             )
+
+            # Success UI + state
             QMessageBox.information(
                 self,
                 "Card Created",
@@ -654,28 +693,10 @@ class PlayerUI(QWidget):
             )
             self.card_created_for_current_segment = True
             self.set_create_button_enabled(False)
+
         except Exception as e:
             QMessageBox.critical(
                 self,
                 "Anki Error",
-                f"Failed to create Anki card: {e}. Is AnkiConnect running?",
+                f"Failed to create Anki card: {e}. Ensure Anki and the Anki‑Connect add‑on are running.",
             )
-
-    def save_anki_deck_name(self):
-        self.settings.setValue("anki_deck_name", self.anki_deck_input.text().strip())
-
-    # === Waveform click-to-preview via event filter ===
-    def eventFilter(self, obj, event):  # type: ignore[override]
-        if obj is self.adjuster and event.type() == QEvent.Type.MouseButtonPress:
-            self.play_adjusted_segment()
-            return True
-        return super().eventFilter(obj, event)
-
-    # === Cleanup ===
-    def closeEvent(self, event):  # type: ignore[override]
-        try:
-            self.player.stop()
-            os.unlink(self._tmp_wav.name)
-        except Exception as e:
-            print(f"[DEBUG] Cleanup failed: {e}")
-        event.accept()

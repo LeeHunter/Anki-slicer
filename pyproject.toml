@@ -1,14 +1,14 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=77.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "anki-slicer"
-version = "0.3.2"  # ⬅️ bump this every release (PyPI enforces immutability)
+version = "0.3.3"  # ⬅️ bump this every release (PyPI enforces immutability)
 description = "Slice audio and subtitles into Anki cards for language learning"
 readme = "README.md"
 requires-python = ">=3.8"
-license = { text = "MIT" }
+license = "MIT"
 
 authors = [
   { name = "Lee Hunter" }
@@ -45,3 +45,12 @@ dependencies = [
 
 [project.scripts]
 anki-slicer = "anki_slicer.__main__:main"
+
+# Tell setuptools to only package anki_slicer* and ignore other top-level dirs
+[tool.setuptools.packages.find]
+include = ["anki_slicer*"]
+exclude = ["tests*", "images*", "test_env*", "anki_clips*"]
+
+# Being explicit (defaults are fine, but this avoids surprises)
+[tool.setuptools]
+include-package-data = false

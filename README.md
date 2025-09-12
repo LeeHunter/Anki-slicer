@@ -10,10 +10,10 @@ It’s designed for language learners who want to build rich, sentence‑level f
 
 ## ✨ Features
 
-⏯️ Precise adjustment of audio selection (no more clipped audio or extra sounds).
-🕹 Slider & Time Display to seek anywhere in the audio.
-🔎 Search subtitles (original, translation, or both) and jump through results.
-📤 Export flagged items into Anki via AnkiConnect — creates cards automatically.
+* ⏯️ Precise adjustment of audio selection (no more clipped audio or extra sounds).
+* 🕹 Slider & Time Display to seek anywhere in the audio.
+* 🔎 Search subtitles (original, translation, or both) and jump through results.
+* 📤 Export flagged items into Anki via AnkiConnect — creates cards automatically.
    
 
 ## 📦 Prerequisites

@@ -75,7 +75,7 @@ pip install -e .
 
 Before using Anki-Slicer you might want to edit your translation SRT before loading:
 For example you can use AI to add explanations, grammar notes, transliterations etc. 
-This text appears on the answer side of the Anki card. Note that Anki uses HTML formatting. 
+This text appears on the answer side of the Anki card. Note that Anki uses RTF formatting. 
     
 
 ## 🤝 Contributing

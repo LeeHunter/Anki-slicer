@@ -19,12 +19,16 @@ class SRTParser:
             with open(filepath, "r", encoding="utf-8") as f:
                 content = f.read().strip()
         except UnicodeDecodeError:
-            # Try with different encoding if UTF-8 fails
             with open(filepath, "r", encoding="latin-1") as f:
                 content = f.read().strip()
 
         entries = []
-        blocks = content.split("\n\n")
+        blocks = re.split(r"\n\n(?=\d+\n)", content)
+
+        print("[DEBUG] SRT blocks loaded:")
+        for block in blocks:
+            print("--- BLOCK ---")
+            print(block)
 
         for block in blocks:
             if not block.strip():
@@ -35,20 +39,14 @@ class SRTParser:
                 continue
 
             try:
-                # Parse index
                 index = int(lines[0])
-
-                # Parse timestamps
                 time_line = lines[1]
                 start_str, end_str = time_line.split(" --> ")
                 start_time = SRTParser._parse_timestamp(start_str)
                 end_time = SRTParser._parse_timestamp(end_str)
-
-                # Parse text (may span multiple lines)
                 text = "\n".join(lines[2:]).strip()
-
+                print(f"[DEBUG] SubtitleEntry index={index} text=\n{text}\n")
                 entries.append(SubtitleEntry(index, start_time, end_time, text))
-
             except (ValueError, IndexError) as e:
                 print(
                     f"Warning: Skipping malformed SRT block: {block[:50]}... Error: {e}"

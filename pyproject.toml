@@ -41,6 +41,7 @@ classifiers = [
 dependencies = [
   "PyQt6>=6.6.0",
   "pydub>=0.25.1",
+  "markdown>=3.6",
 ]
 
 [project.scripts]

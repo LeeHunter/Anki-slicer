@@ -20,6 +20,12 @@ from anki_slicer.segment_adjuster import SegmentAdjusterWidget
 from anki_slicer.ankiconnect import AnkiConnect
 import tempfile
 import os
+import markdown
+
+
+def format_markdown(text: str) -> str:
+    """Convert Markdown into HTML so Qt/Anki can render bullets/lists/etc."""
+    return markdown.markdown(text)
 
 
 class PlayerUI(QWidget):
@@ -111,7 +117,7 @@ class PlayerUI(QWidget):
         self.adjuster.installEventFilter(self)
 
     def save_anki_deck_name(self, *_):
-        # Accepts the signal’s str arg (or none) without complaining
+        # Accepts the signal's str arg (or none) without complaining
         self.settings.setValue("anki_deck_name", self.anki_deck_input.text().strip())
 
     def setup_ui(self):
@@ -407,9 +413,20 @@ class PlayerUI(QWidget):
             else None
         )
         self.orig_label.setText(orig_entry.text)
-        self.trans_label.setText(
-            trans_entry.text if trans_entry else "(no translation)"
-        )
+
+        # ✅ NEW: Enable rich text and convert Markdown → HTML
+        self.trans_label.setTextFormat(Qt.TextFormat.RichText)
+        # Debug: print translation text and rendered HTML
+        if trans_entry:
+            print("[DEBUG] Translation text:")
+            print(trans_entry.text)
+            html = format_markdown(trans_entry.text)
+            print("[DEBUG] Rendered HTML:")
+            print(html)
+            self.trans_label.setText(html)
+        else:
+            self.trans_label.setText("(no translation)")
+
         self.progress_label.setText(
             f"Subtitle {self.current_index + 1} of {len(self.orig_entries)}"
         )
@@ -669,7 +686,7 @@ class PlayerUI(QWidget):
             )
             clip_path = os.path.abspath(clip_path)
 
-            # Fallback if the slicer didn’t produce a file (rare)
+            # Fallback if the slicer didn't produce a file (rare)
             if not os.path.exists(clip_path):
                 clip_path = self._export_clip_fallback(
                     out_dir, start_sec, end_sec, self.current_index + 1
@@ -677,10 +694,14 @@ class PlayerUI(QWidget):
             if not os.path.exists(clip_path):
                 raise FileNotFoundError(f"Clip not found after slicing: {clip_path}")
 
-            # Add note to Anki
+            # ✅ NEW: Add note to Anki with Markdown → HTML conversion
             anki.add_note(
                 current_entry.text,
-                trans_entry.text if trans_entry else "(no translation)",
+                (
+                    format_markdown(trans_entry.text)
+                    if trans_entry
+                    else "(no translation)"
+                ),
                 clip_path,
                 deck_name=deck_name,
             )

@@ -210,7 +210,8 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# Ignore audio exports
+# Ignore audio exports and subtitle files
 anki_clips/
 *.wav
 *.mp3
+*.SRT 

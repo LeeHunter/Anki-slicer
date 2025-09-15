@@ -7,7 +7,7 @@ name = "anki-slicer"
 version = "0.3.3"  # ⬅️ bump this every release (PyPI enforces immutability)
 description = "Slice audio and subtitles into Anki cards for language learning"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 license = "MIT"
 
 authors = [
@@ -42,6 +42,8 @@ dependencies = [
   "PyQt6>=6.6.0",
   "pydub>=0.25.1",
   "markdown>=3.6",
+  "requests>=2.31.0",
+  "numpy>=1.26",
 ]
 
 [project.scripts]

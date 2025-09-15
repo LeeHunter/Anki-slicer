@@ -42,9 +42,16 @@ class AnkiConnect:
                 raise Exception(f"Failed to ensure deck '{deck_name}': {e}")
 
     def add_note(
-        self, front: str, back: str, audio_path: str, deck_name: str = "AnkiSlicer"
+        self,
+        front: str,
+        back: str,
+        audio_path: str,
+        deck_name: str = "AnkiSlicer",
+        tags: list | None = None,
     ):
         """Add a note to Anki with audio attachment."""
+        if tags is None:
+            tags = []
         note = {
             "deckName": deck_name,
             "modelName": "Basic",
@@ -52,6 +59,7 @@ class AnkiConnect:
                 "Front": front,
                 "Back": back,
             },
+            "tags": tags,
             "audio": [
                 {
                     "path": audio_path,

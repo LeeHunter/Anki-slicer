@@ -4,6 +4,9 @@ from pydub import AudioSegment
 from PyQt6.QtWidgets import QWidget, QSizePolicy
 from PyQt6.QtCore import Qt, QRectF, QPointF
 from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QPolygonF
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class SegmentAdjusterWidget(QWidget):
@@ -42,7 +45,7 @@ class SegmentAdjusterWidget(QWidget):
             self.waveform = samples
             self.sample_rate = int(audio.frame_rate)
         except Exception as e:
-            print(f"Failed to load waveform: {e}")
+            logger.warning("Failed to load waveform: %s", e)
             self.waveform = None
             self.sample_rate = None
 
@@ -71,14 +74,16 @@ class SegmentAdjusterWidget(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        # Clear background - light gray to distinguish widget
-        painter.fillRect(self.rect(), QColor("#f0f0f0"))
+        # Clear background - white for higher contrast
+        painter.fillRect(self.rect(), QColor("#ffffff"))
 
         if self.waveform is None or self.raw_end <= self.raw_start:
             return
 
         w, h = self.width(), self.height()
-        pad = 12
+        # Reduce internal padding so the waveform box aligns better with
+        # neighboring controls (visually wider)
+        pad = 6
         track_rect = QRectF(pad, pad, w - 2 * pad, h - 2 * pad)
 
         # Draw waveform for the raw segment bounds

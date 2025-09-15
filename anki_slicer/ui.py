@@ -7,10 +7,15 @@ from PyQt6.QtWidgets import (
     QMessageBox,
 )
 from PyQt6.QtCore import QSettings
+from PyQt6.QtGui import QIcon
+from pathlib import Path
 from .player import PlayerUI
 from .subs import SRTParser, SubtitleEntry
 import os
 import re
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 TIMESTAMP_RE = re.compile(
@@ -23,6 +28,14 @@ class FileSelectorUI(QWidget):
         super().__init__()
         self.setWindowTitle("Anki‑Slicer – Select Files")
         self.setMinimumSize(400, 200)
+
+        # Set window icon if present
+        try:
+            icon_path = Path(__file__).resolve().parent.parent / "images" / "app_icon.png"
+            if icon_path.exists():
+                self.setWindowIcon(QIcon(str(icon_path)))
+        except Exception:
+            pass
 
         self.audio_path = None
         self.orig_srt = None
@@ -196,7 +209,7 @@ class FileSelectorUI(QWidget):
 
     def _load_translation_entries(self, path: str, orig_entries):
         ext = self._ext(path)
-        print(f"[DEBUG] Loading translation file: {path}, detected extension: {ext}")
+        logger.debug("Loading translation file: %s, detected extension: %s", path, ext)
         if ext == "srt":
             return SRTParser.parse_srt_file(path)
         if ext == "txt":

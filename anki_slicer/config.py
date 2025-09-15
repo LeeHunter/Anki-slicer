@@ -1,4 +1,4 @@
-import json, os
+import json, os, logging
 
 CONFIG_FILE = os.path.expanduser("~/.anki_slicer_config.json")
 
@@ -19,4 +19,4 @@ def save_config(data: dict):
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
     except Exception as e:
-        print(f"[WARN] Failed to save config: {e}")
+        logging.getLogger(__name__).warning("Failed to save config: %s", e)

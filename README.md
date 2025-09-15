@@ -4,6 +4,9 @@
 [![Python versions](https://img.shields.io/pypi/pyversions/anki-slicer.svg)](https://pypi.org/project/anki-slicer/)
 [![License](https://img.shields.io/github/license/leehunter/Anki-slicer)](LICENSE)
 
+
+<img src="images/app_icon.png" alt="application icon" width="200"/>
+
 Anki‑Slicer is a utility that lets you take an audio file (MP3, WAV, etc.) plus two SRT subtitles (original + translation), preview and flag sentences you want to learn, and then export it into an Anki flashcard deck. 
 
 It’s designed for language learners who want to build rich, sentence‑level flashcards with audio + text, all in just a few clicks. 
@@ -20,6 +23,10 @@ It’s designed for language learners who want to build rich, sentence‑level f
 
 * Python 3.9 or later
 * [Anki](https://apps.ankiweb.net/) with the AnkiConnect add‑on installed and running.
+* FFmpeg installed and on your PATH (required by pydub for reading/exporting audio).
+  - macOS: `brew install ffmpeg`
+  - Windows: `choco install ffmpeg` (or download from ffmpeg.org and add to PATH)
+  - Linux: `sudo apt-get install ffmpeg` (Debian/Ubuntu) or your distro equivalent
 * An audio file and two SRT files:
     * Original transcript (same language as the audio).
     * Translation of the original text.*
@@ -44,15 +51,27 @@ pip install -e .
 ## Preview
 ![Anki-Slicer screenshot](images/SCR-20250912-gpjp.png)
 
+## App Icon
+
+You can customize the app’s icon shown in the window/dock/taskbar by placing a PNG at `images/app_icon.png`.
+
+- Recommended: 512×512 or 256×256 PNG with transparency (runtime).
+- Source asset: 1024×1024 PNG for future scaling.
+
+At runtime, the launcher sets the icon automatically if the file exists. For bundled apps:
+
+- Windows: provide a multi-size `.ico` (16→256 px) to your bundler.
+- macOS: provide an `.icns` (16→1024 px + 2x variants) to your bundler.
+
 
 ## Usage
-
-   In a terminal run the following command: python -m anki_slicer
 
     Ensure Anki (with the AnkiConnect add-on) is running.
     Launch Anki‑Slicer:
 
-    python main.py
+    anki-slicer
+    # or
+    python -m anki_slicer
 
     Select your:
         Audio file

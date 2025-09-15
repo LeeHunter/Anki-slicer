@@ -1,6 +1,9 @@
 import re
+import logging
 from typing import List, Tuple, Optional
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -25,10 +28,9 @@ class SRTParser:
         entries = []
         blocks = re.split(r"\n\n(?=\d+\n)", content)
 
-        print("[DEBUG] SRT blocks loaded:")
+        logger.debug("SRT blocks loaded (%d blocks)", len(blocks))
         for block in blocks:
-            print("--- BLOCK ---")
-            print(block)
+            logger.debug("--- BLOCK ---\n%s", block)
 
         for block in blocks:
             if not block.strip():
@@ -45,11 +47,13 @@ class SRTParser:
                 start_time = SRTParser._parse_timestamp(start_str)
                 end_time = SRTParser._parse_timestamp(end_str)
                 text = "\n".join(lines[2:]).strip()
-                print(f"[DEBUG] SubtitleEntry index={index} text=\n{text}\n")
+                logger.debug("SubtitleEntry index=%s text=\n%s\n", index, text)
                 entries.append(SubtitleEntry(index, start_time, end_time, text))
             except (ValueError, IndexError) as e:
-                print(
-                    f"Warning: Skipping malformed SRT block: {block[:50]}... Error: {e}"
+                logger.warning(
+                    "Skipping malformed SRT block: %s... Error: %s",
+                    block[:50],
+                    e,
                 )
                 continue
 

@@ -7,20 +7,26 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QSlider,
     QLineEdit,
-    QRadioButton,
-    QButtonGroup,
-    QGroupBox,
+    QTextEdit,
     QSizePolicy,
+    QFormLayout,
+    QFrame,
 )
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PyQt6.QtCore import QUrl, QTimer, Qt, QSettings, QEvent
 from PyQt6.QtGui import QKeySequence, QAction, QFont
+import logging
+import re
 from anki_slicer.subs import SubtitleEntry
 from anki_slicer.segment_adjuster import SegmentAdjusterWidget
 from anki_slicer.ankiconnect import AnkiConnect
 import tempfile
 import os
 import markdown
+from PyQt6.QtGui import QIcon
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 def format_markdown(text: str) -> str:
@@ -39,6 +45,14 @@ class PlayerUI(QWidget):
         self.setWindowTitle("Anki-slicer Player")
         self.setMinimumSize(950, 650)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+        # Set window icon if present
+        try:
+            icon_path = Path(__file__).resolve().parent.parent / "images" / "app_icon.png"
+            if icon_path.exists():
+                self.setWindowIcon(QIcon(str(icon_path)))
+        except Exception:
+            pass
 
         self.mp3_path = mp3_path
         self.orig_entries = orig_entries
@@ -122,106 +136,178 @@ class PlayerUI(QWidget):
 
     def setup_ui(self):
         layout = QVBoxLayout()
+        self._updating_ui = False
 
-        # === Search controls ===
+        # === Text panel (Search + Original/Translation) ===
+        text_panel = QFrame()
+        text_panel.setStyleSheet("background-color:#ffffff; border:none; border-radius:6px;")
+        text_layout = QVBoxLayout(text_panel)
+        text_layout.setContentsMargins(16, 16, 16, 16)
+        text_layout.setSpacing(10)
+
+        # Search controls (single row: input, button, counter)
         search_row = QHBoxLayout()
+        search_row.setSpacing(6)
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Search subtitles...")
+        # Fixed width sized for ~20 characters
+        try:
+            w20 = self.search_input.fontMetrics().horizontalAdvance("M" * 20) + 24
+            self.search_input.setFixedWidth(w20)
+        except Exception:
+            pass
         self.search_btn = QPushButton("Search")
-        self.search_btn.clicked.connect(self.run_search)
-        self.next_match_btn = QPushButton("Next Match")
-        self.next_match_btn.clicked.connect(self.next_match)
+        self.search_btn.clicked.connect(self.on_search_button)
+        self.search_input.returnPressed.connect(self.on_search_button)
+        # Make button size follow its label (fixed) with modest padding
+        self.search_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.search_btn.setStyleSheet(
+            "border:1px solid #dddddd; border-radius:4px; padding:4px 10px; background:#ffffff;"
+        )
+        self.search_counter = QLabel("")
+        self.search_counter.setStyleSheet("color:#666; font-size:12px; padding-left:6px;")
+        # Reserve fixed width so search box doesn't resize when counter appears
+        reserve_w = self.fontMetrics().horizontalAdvance("999 of 999") + 12
+        self.search_counter.setFixedWidth(reserve_w)
+
+        self.search_input.textChanged.connect(self.clear_search_state)
+
         search_row.addWidget(self.search_input)
         search_row.addWidget(self.search_btn)
-        search_row.addWidget(self.next_match_btn)
-        layout.addLayout(search_row)
-
-        # === Search Scope ===
-        scope_group_box = QGroupBox("Search Scope")
-        scope_layout = QHBoxLayout()
-        self.scope_group = QButtonGroup(self)
-        self.radio_orig = QRadioButton("Original")
-        self.radio_trans = QRadioButton("Translation")
-        self.radio_both = QRadioButton("Both")
-        self.radio_both.setChecked(True)
-        for rb in (self.radio_orig, self.radio_trans, self.radio_both):
-            self.scope_group.addButton(rb)
-            scope_layout.addWidget(rb)
-        scope_group_box.setLayout(scope_layout)
-        layout.addWidget(scope_group_box)
+        search_row.addWidget(self.search_counter)
+        search_row.addStretch(1)
+        text_layout.addLayout(search_row)
 
         # === Subtitle displays ===
-        base_style = "font-size: 16px; padding: 10px; border: 1px solid #ccc;"
-
-        orig_title = QLabel("Original")
-        orig_title.setStyleSheet(
-            "font-size: 18px; font-weight: bold; margin-top: 10px;"
+        base_style = (
+            "font-size: 16px; padding: 6px; background-color: #ffffff; "
+            "border: 1px solid #dddddd; border-radius: 4px; color: #3565B1;"
         )
+
         trans_title = QLabel("Translation")
         trans_title.setStyleSheet(
-            "font-size: 18px; font-weight: bold; margin-top: 10px;"
+            "font-size: 18px; font-weight: bold; color: #E0E0E0;"
         )
 
-        self.orig_label = QLabel("(waiting for audio...)")
-        self.orig_label.setWordWrap(False)  # single line
-        self.orig_label.setStyleSheet(base_style)
-        self.orig_label.setSizePolicy(
+        # Header row for Original label (progress removed)
+        orig_header_row = QHBoxLayout()
+        orig_title = QLabel("Original")
+        orig_title.setStyleSheet(
+            "font-size: 18px; font-weight: bold; color: #E0E0E0;"
+        )
+        orig_header_row.addWidget(orig_title)
+        orig_header_row.addStretch(1)
+        text_layout.addLayout(orig_header_row)
+
+        # Original: editable single-line
+        self.orig_input = QLineEdit()
+        self.orig_input.setPlaceholderText("Edit original subtitle…")
+        # Use a leaner style for the single-line editor to prevent visual clipping
+        self.orig_input.setStyleSheet(
+            "border: 1px solid #dddddd; border-radius: 4px; "
+            "padding: 2px 8px; background-color: #ffffff; color: #3565B1;"
+        )
+        self.orig_input.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
         )
+        # Minimal text margins to avoid overlap with the rounded border
+        try:
+            self.orig_input.setTextMargins(2, 2, 2, 2)
+        except Exception:
+            pass
+        self.orig_input.textChanged.connect(self.on_original_changed)
 
-        self.trans_label = QLabel("(waiting for audio...)")
-        self.trans_label.setWordWrap(True)
-        self.trans_label.setStyleSheet(base_style)
-        self.trans_label.setSizePolicy(
+        # Translation: editable Markdown with fixed height + scrollbar
+        self.trans_editor = QTextEdit()
+        # Accept only plain text editing to avoid HTML paste breaking lists
+        self.trans_editor.setAcceptRichText(False)
+        self.trans_editor.setPlaceholderText("Edit translation (Markdown supported)…")
+        self.trans_editor.setStyleSheet(base_style)
+        self.trans_editor.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
         )
+        self.trans_editor.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
+        self.trans_editor.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        self.trans_editor.textChanged.connect(self.on_translation_changed)
+        # Make translation text smaller (total ~6 points smaller than default)
+        try:
+            tf = self.trans_editor.font()
+            if tf.pointSize() > 0:
+                tf.setPointSize(max(6, tf.pointSize() - 6))
+                self.trans_editor.setFont(tf)
+            # Reduce document margin so text isn't blocked by padding
+            self.trans_editor.document().setDocumentMargin(6)
+            self.trans_editor.setViewportMargins(0, 0, 0, 0)
+        except Exception:
+            pass
 
-        # Fix heights: Original ~1 line; Translation ~6 lines
-        fm = self.orig_label.fontMetrics()
+        # Fix heights: let Original use its size hint; Translation ~6 lines
+        fm = self.fontMetrics()
         line_h = fm.lineSpacing()
-        self.orig_label.setFixedHeight(int(line_h + 20))  # 1 line + padding
-        self.trans_label.setFixedHeight(int(line_h * 6 + 20))  # ~6 lines + padding
+        self.orig_input.setMinimumHeight(self.orig_input.sizeHint().height())
+        self.trans_editor.setFixedHeight(int(line_h * 6 + 20))  # ~6 lines + padding
 
-        layout.addWidget(orig_title)
-        layout.addWidget(self.orig_label)
-        layout.addWidget(trans_title)
-        layout.addWidget(self.trans_label)
+        text_layout.addWidget(self.orig_input)
+        text_layout.addWidget(trans_title)
+        text_layout.addWidget(self.trans_editor)
 
-        # === Slider + time ===
+        # Add text panel to main layout
+        layout.addWidget(text_panel)
+
+        # === Audio panel (Slider, controls, waveform, segment controls) ===
+        audio_panel = QFrame()
+        audio_panel.setStyleSheet("background-color:#ffffff; border:none; border-radius:6px;")
+        audio_layout = QVBoxLayout(audio_panel)
+        audio_layout.setContentsMargins(16, 16, 16, 16)
+        audio_layout.setSpacing(10)
+
+        # Slider + time
         slider_row = QHBoxLayout()
         self.pos_slider = QSlider(Qt.Orientation.Horizontal)
         self.pos_slider.setRange(0, 0)
         self.pos_slider.sliderMoved.connect(self.seek)
         self.pos_slider.sliderPressed.connect(self.on_slider_pressed)
         self.pos_slider.sliderReleased.connect(self.on_slider_released)
+        # Style the slider for better visibility and a grey handle
+        self.pos_slider.setStyleSheet(
+            "QSlider::groove:horizontal{height:6px;background:#e6e6e6;border-radius:3px;}"
+            "QSlider::handle:horizontal{background:#cccccc;border:1px solid #b3b3b3;width:16px;height:16px;margin:-5px 0;border-radius:8px;}"
+            "QSlider::handle:horizontal:hover{background:#bdbdbd;}"
+            "QSlider::handle:horizontal:pressed{background:#9e9e9e;}"
+        )
         self.time_label = QLabel("00:00 / 00:00")
         slider_row.addWidget(self.pos_slider, stretch=1)
         slider_row.addWidget(self.time_label)
-        layout.addLayout(slider_row)
+        audio_layout.addLayout(slider_row)
 
         # === Playback controls ===
         # Swap positions: Back on the left, Forward on the right.
         controls = QHBoxLayout()
         self.back_btn = QPushButton("Back")
+        self.back_btn.setStyleSheet("border: 1px solid #dddddd; border-radius: 4px;")
         self.back_btn.clicked.connect(self.back_to_previous)
         self.forward_btn = QPushButton("Forward")
+        self.forward_btn.setStyleSheet("border: 1px solid #dddddd; border-radius: 4px;")
         self.forward_btn.clicked.connect(self.forward_to_next)
-        self.mode_btn = QPushButton("Mode: Continuous")
+        self.mode_btn = QPushButton("Switch to Auto‑Pause")
         self.mode_btn.setCheckable(True)
         self.mode_btn.clicked.connect(self.toggle_mode)
+        # Keep mode button color stable (white in both states)
+        self.mode_btn.setStyleSheet(
+            "QPushButton{background-color:#ffffff; border:1px solid #dddddd; border-radius:4px;} "
+            "QPushButton:checked{background-color:#ffffff; border:1px solid #dddddd; border-radius:4px;}"
+        )
         controls.addWidget(self.back_btn)
         controls.addWidget(self.forward_btn)
         controls.addWidget(self.mode_btn)
-        layout.addLayout(controls)
-
-        # === Progress ===
-        self.progress_label = QLabel(f"Subtitle 1 of {len(self.orig_entries)}")
-        layout.addWidget(self.progress_label)
+        audio_layout.addLayout(controls)
 
         # === Waveform widget ===
         self.adjuster = SegmentAdjusterWidget(self.mp3_path, self.player)
         self.adjuster.setFixedHeight(160)
-        layout.addWidget(self.adjuster)
+        audio_layout.addWidget(self.adjuster)
 
         # === Segment adjustment controls ===
         segment_controls_row = QHBoxLayout()
@@ -233,10 +319,21 @@ class PlayerUI(QWidget):
         self.start_plus = QPushButton("+")
         for btn in (self.start_minus, self.start_plus):
             btn.setFixedSize(32, 32)
-            btn.setStyleSheet("font-size: 16px; font-weight: bold;")
+            btn.setStyleSheet("font-size: 16px; font-weight: bold; border:1px solid #dddddd; border-radius:4px;")
         segment_controls_row.addWidget(start_label)
         segment_controls_row.addWidget(self.start_minus)
         segment_controls_row.addWidget(self.start_plus)
+
+        segment_controls_row.addStretch(1)
+
+        # Extend Selection between start and end controls
+        self.add_next_btn = QPushButton("Extend Selection →→")
+        self.add_next_btn.clicked.connect(self.toggle_extend_selection)
+        self.add_next_btn.setMinimumWidth(200)
+        self.add_next_btn.setStyleSheet(
+            "border: 1px solid #dddddd; border-radius: 4px; padding: 6px 16px; background:#ffffff; color:#000;"
+        )
+        segment_controls_row.addWidget(self.add_next_btn)
 
         segment_controls_row.addStretch(1)
 
@@ -246,12 +343,14 @@ class PlayerUI(QWidget):
         self.end_plus = QPushButton("+")
         for btn in (self.end_minus, self.end_plus):
             btn.setFixedSize(32, 32)
-            btn.setStyleSheet("font-size: 16px; font-weight: bold;")
+            btn.setStyleSheet("font-size: 16px; font-weight: bold; border:1px solid #dddddd; border-radius:4px;")
         segment_controls_row.addWidget(end_label)
         segment_controls_row.addWidget(self.end_minus)
         segment_controls_row.addWidget(self.end_plus)
 
-        layout.addLayout(segment_controls_row)
+        audio_layout.addLayout(segment_controls_row)
+        # Add audio panel to main layout
+        layout.addWidget(audio_panel)
 
         # Connect nudges
         self.start_minus.clicked.connect(lambda: self.nudge_segment("start", -0.05))
@@ -259,33 +358,132 @@ class PlayerUI(QWidget):
         self.end_minus.clicked.connect(lambda: self.nudge_segment("end", -0.05))
         self.end_plus.clicked.connect(lambda: self.nudge_segment("end", +0.05))
 
-        # === Anki controls ===
-        anki_controls_row = QHBoxLayout()
-        self.anki_deck_label = QLabel("Anki Deck:")
+        # === Anki panel ===
+        anki_panel = QFrame()
+        anki_panel.setStyleSheet("background-color:#ffffff; border:none; border-radius:6px;")
+        bottom_row = QHBoxLayout(anki_panel)
+        bottom_row.setContentsMargins(16, 16, 16, 16)
+        bottom_row.setSpacing(10)
+
+        # Form with aligned labels
+        form = QFormLayout()
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.DontWrapRows)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        form.setFormAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+
+        # Deck field
         self.anki_deck_input = QLineEdit()
+        self.anki_deck_input.setStyleSheet("border:1px solid #dddddd; border-radius:4px; background-color:#ffffff; padding:6px;")
         self.anki_deck_input.setText(
             self.settings.value("anki_deck_name", "AnkiSlicer")
         )
         self.anki_deck_input.textChanged.connect(self.save_anki_deck_name)
+        form.addRow("Anki Deck:", self.anki_deck_input)
+
+        # Source field
+        self.source_input = QLineEdit()
+        self.source_input.setStyleSheet("border:1px solid #dddddd; border-radius:4px; background-color:#ffffff; padding:6px;")
+        self.source_input.setPlaceholderText("e.g., YouTube URL or show name")
+        self.source_input.setText(self.settings.value("anki_source", ""))
+        self.source_input.textChanged.connect(
+            lambda *_: self.settings.setValue("anki_source", self.source_input.text())
+        )
+        form.addRow("Source:", self.source_input)
+
+        # Tags field
+        self.tags_input = QLineEdit()
+        self.tags_input.setStyleSheet("border:1px solid #dddddd; border-radius:4px; background-color:#ffffff; padding:6px;")
+        self.tags_input.setPlaceholderText("comma-separated, e.g., Chinese,news,HSK")
+        self.tags_input.setText(self.settings.value("anki_tags", ""))
+        self.tags_input.textChanged.connect(
+            lambda *_: self.settings.setValue("anki_tags", self.tags_input.text())
+        )
+        form.addRow("Tags:", self.tags_input)
+
+        bottom_row.addLayout(form, stretch=3)
+        bottom_row.addStretch(1)
+
+        # Create button: bigger and right-aligned
         self.create_card_btn = QPushButton("Create Anki Card")
         self.set_create_button_enabled(False)
-        anki_controls_row.addWidget(self.anki_deck_label)
-        anki_controls_row.addWidget(self.anki_deck_input, stretch=1)
-        anki_controls_row.addStretch(1)
-        anki_controls_row.addWidget(self.create_card_btn)
-        layout.addLayout(anki_controls_row)
+        self.create_card_btn.setMinimumHeight(96)
+        self.create_card_btn.setMinimumWidth(208)
+        self.create_card_btn.setStyleSheet(
+            "padding: 12px 24px; font-size: 18px; font-weight: bold; border:1px solid #dddddd; border-radius:6px;"
+        )
+        bottom_row.addWidget(
+            self.create_card_btn,
+            stretch=0,
+            alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+        )
+        layout.addWidget(anki_panel)
 
         self.create_card_btn.clicked.connect(self.create_anki_card)
 
         self.setLayout(layout)
         self.update_subtitle_display()
+        # Extended selection state
+        self.extend_active = False
+        self.extend_end_index = None
+        self.temp_combined_orig = None
+        self.temp_combined_trans = None
+
+    def on_original_changed(self):
+        if getattr(self, "_updating_ui", False):
+            return
+        try:
+            if getattr(self, "extend_active", False):
+                # Do not persist edits into entries during extended mode
+                self.temp_combined_orig = self.orig_input.text()
+            else:
+                self.orig_entries[self.current_index].text = self.orig_input.text()
+        except Exception:
+            pass
+        self.card_created_for_current_segment = False
+        self.set_create_button_enabled(True)
+
+    def on_translation_changed(self):
+        if getattr(self, "_updating_ui", False):
+            return
+        try:
+            if getattr(self, "extend_active", False):
+                self.temp_combined_trans = self._get_current_translation_markdown()
+            else:
+                if self.current_index < len(self.trans_entries):
+                    self.trans_entries[self.current_index].text = self._get_current_translation_markdown()
+        except Exception:
+            pass
+        self.card_created_for_current_segment = False
+        self.set_create_button_enabled(True)
+
+    # Persist edits into the current entries
+    def save_current_edits(self):
+        try:
+            if not getattr(self, "extend_active", False):
+                orig_text = self.orig_input.text()
+                self.orig_entries[self.current_index].text = orig_text
+        except Exception:
+            pass
+        try:
+            # Pull Markdown from the editor to preserve lists/bullets
+            if not getattr(self, "extend_active", False):
+                md = self._get_current_translation_markdown()
+                if self.current_index < len(self.trans_entries):
+                    self.trans_entries[self.current_index].text = md
+        except Exception:
+            pass
 
     # Styled enable/disable for the Create button
     def set_create_button_enabled(self, enabled: bool):
+        # Safeguard: during initial UI setup, this may be called before
+        # the create button is constructed.
+        if not hasattr(self, "create_card_btn"):
+            return
         self.create_card_btn.setEnabled(enabled)
         if enabled:
             self.create_card_btn.setStyleSheet(
-                "background-color: #2ecc71; color: white; font-weight: bold;"
+                "background-color: #3565B1; color: white; font-weight: bold;"
             )
         else:
             self.create_card_btn.setStyleSheet(
@@ -385,22 +583,31 @@ class PlayerUI(QWidget):
         position_sec = self.player.position() / 1000.0
         new_index = self.find_subtitle_index(position_sec)
         if new_index != self.current_index:
+            self.save_current_edits()
             self.current_index = new_index
             self.update_subtitle_display()
 
     def show_current_segment_in_adjuster(self):
         entry = self.orig_entries[self.current_index]
         total_sec = max(0.0, (self.total_duration or 0) / 1000.0)
-
         margin = float(self.MARGIN_SEC)
-        raw_start = max(0.0, entry.start_time - margin)
-        raw_end = entry.end_time + margin
+
+        # If extended, union with next segment
+        if getattr(self, "extend_active", False) and self.extend_end_index is not None and self.extend_end_index < len(self.orig_entries):
+            end_entry = self.orig_entries[self.extend_end_index]
+            sel_start = entry.start_time
+            sel_end = end_entry.end_time
+            raw_start = max(0.0, sel_start - margin)
+            raw_end = sel_end + margin
+        else:
+            sel_start = entry.start_time
+            sel_end = entry.end_time
+            raw_start = max(0.0, sel_start - margin)
+            raw_end = sel_end + margin
         if total_sec > 0:
             raw_end = min(raw_end, total_sec)
 
-        self.adjuster.set_bounds_and_selection(
-            raw_start, raw_end, entry.start_time, entry.end_time
-        )
+        self.adjuster.set_bounds_and_selection(raw_start, raw_end, sel_start, sel_end)
 
         self.card_created_for_current_segment = False
         self.set_create_button_enabled(True)
@@ -412,28 +619,48 @@ class PlayerUI(QWidget):
             if self.current_index < len(self.trans_entries)
             else None
         )
-        self.orig_label.setText(orig_entry.text)
 
-        # ✅ NEW: Enable rich text and convert Markdown → HTML
-        self.trans_label.setTextFormat(Qt.TextFormat.RichText)
-        # Debug: print translation text and rendered HTML
-        if trans_entry:
-            print("[DEBUG] Translation text:")
-            print(trans_entry.text)
-            html = format_markdown(trans_entry.text)
-            print("[DEBUG] Rendered HTML:")
-            print(html)
-            self.trans_label.setText(html)
-        else:
-            self.trans_label.setText("(no translation)")
+        # Determine whether to show combined (extended) text
+        show_orig = orig_entry.text
+        show_trans = trans_entry.text if trans_entry else ""
+        if getattr(self, "extend_active", False) and self.extend_end_index is not None:
+            # Combine with the next entry
+            if self.extend_end_index < len(self.orig_entries):
+                next_orig = self.orig_input.text()  # current edited text
+                # Use current editor markdown for current part; then append next
+                show_orig = (next_orig or orig_entry.text) + " " + self.orig_entries[self.extend_end_index].text
+                next_trans = (
+                    self.trans_entries[self.extend_end_index].text
+                    if self.extend_end_index < len(self.trans_entries)
+                    else ""
+                )
+                current_md = self._get_current_translation_markdown()
+                show_trans = (current_md or (trans_entry.text if trans_entry else ""))
+                if next_trans:
+                    show_trans = (show_trans + "\n" + next_trans).strip()
+            # Cache combined in temp vars
+            self.temp_combined_orig = show_orig
+            self.temp_combined_trans = show_trans
 
-        self.progress_label.setText(
-            f"Subtitle {self.current_index + 1} of {len(self.orig_entries)}"
-        )
+        # Populate editors without triggering change handlers
+        try:
+            self._updating_ui = True
+            self.orig_input.setText(show_orig)
+            if show_trans:
+                if hasattr(self.trans_editor, 'setMarkdown'):
+                    self.trans_editor.setMarkdown(show_trans)
+                else:
+                    self.trans_editor.setPlainText(show_trans)
+            else:
+                self.trans_editor.clear()
+        finally:
+            self._updating_ui = False
+
         self.show_current_segment_in_adjuster()
 
         self.card_created_for_current_segment = False
         self.set_create_button_enabled(True)
+        self.update_extend_button_enabled()
 
     # Spacebar play/pause
     def toggle_play(self):
@@ -478,7 +705,7 @@ class PlayerUI(QWidget):
     def toggle_mode(self):
         self.auto_pause_mode = self.mode_btn.isChecked()
         self.mode_btn.setText(
-            "Mode: Auto‑Pause" if self.auto_pause_mode else "Mode: Continuous"
+            "Switch to Continuous" if self.auto_pause_mode else "Switch to Auto‑Pause"
         )
 
         self.auto_pause_timer.stop()
@@ -504,11 +731,15 @@ class PlayerUI(QWidget):
             return
 
         if self.current_index < len(self.orig_entries) - 1:
+            self.cancel_extend_selection()
+            self.save_current_edits()
             self.current_index += 1
         self.jump_to_current_subtitle_and_play()
 
     def back_to_previous(self):
         if self.current_index > 0:
+            self.cancel_extend_selection()
+            self.save_current_edits()
             self.current_index -= 1
         self.jump_to_current_subtitle_and_play()
 
@@ -534,7 +765,11 @@ class PlayerUI(QWidget):
         self.slider_active = False
         pos = self.pos_slider.value()
         self.player.setPosition(pos)
-        self.current_index = self.find_subtitle_index(pos / 1000.0)
+        new_index = self.find_subtitle_index(pos / 1000.0)
+        if new_index != self.current_index:
+            self.cancel_extend_selection()
+            self.save_current_edits()
+            self.current_index = new_index
         self.update_subtitle_display()
         self.waiting_for_resume = False
         self.show_current_segment_in_adjuster()
@@ -572,6 +807,54 @@ class PlayerUI(QWidget):
         m, s = divmod(seconds, 60)
         return f"{m}:{s:02}"
 
+    # Helpers for translation markdown access
+    def _get_current_translation_markdown(self) -> str:
+        if hasattr(self.trans_editor, 'toMarkdown'):
+            return self.trans_editor.toMarkdown()
+        return self.trans_editor.toPlainText()
+
+    def update_extend_button_enabled(self):
+        enabled = self.current_index < len(self.orig_entries) - 1
+        self.add_next_btn.setEnabled(enabled)
+
+    def set_extend_button_active_style(self, active: bool):
+        if active:
+            self.add_next_btn.setStyleSheet(
+                "background-color:#3565B1; color:#ffffff; border:1px solid #dddddd; border-radius:4px; padding:6px 16px;"
+            )
+        else:
+            self.add_next_btn.setStyleSheet(
+                "border:1px solid #dddddd; border-radius:4px; padding:6px 16px; background:#ffffff; color:#000;"
+            )
+
+    def toggle_extend_selection(self):
+        if getattr(self, "extend_active", False):
+            self.cancel_extend_selection()
+        else:
+            self.activate_extend_selection()
+
+    def activate_extend_selection(self):
+        if self.current_index >= len(self.orig_entries) - 1:
+            return
+        self.extend_active = True
+        self.extend_end_index = self.current_index + 1
+        self.set_extend_button_active_style(True)
+        # Refresh display and adjuster to reflect combined segment
+        self.update_subtitle_display()
+        self.show_current_segment_in_adjuster()
+
+    def cancel_extend_selection(self):
+        if not getattr(self, "extend_active", False):
+            return
+        self.extend_active = False
+        self.extend_end_index = None
+        self.temp_combined_orig = None
+        self.temp_combined_trans = None
+        self.set_extend_button_active_style(False)
+        # Restore editors to current segment only
+        self.update_subtitle_display()
+        self.show_current_segment_in_adjuster()
+
     # === Search Features ===
     def run_search(self):
         term = self.search_input.text().strip().lower()
@@ -586,32 +869,60 @@ class PlayerUI(QWidget):
                 if i < len(self.trans_entries)
                 else ""
             )
-            match_orig = self.radio_orig.isChecked() and term in orig_text
-            match_trans = self.radio_trans.isChecked() and term in trans_text
-            match_both = self.radio_both.isChecked() and (
-                term in orig_text or term in trans_text
-            )
-            if match_orig or match_trans or match_both:
+            if term in orig_text or term in trans_text:
                 self.search_matches.append(i)
         if not self.search_matches:
             QMessageBox.information(self, "No Results", f"No matches for '{term}'.")
+            self.search_btn.setText("Search")
+            self.search_counter.setText("")
             return
         self.search_index = 0
+        self.search_total = len(self.search_matches)
+        self.search_btn.setText("Next Match")
         self.jump_to_match()
+
+    def on_search_button(self):
+        # If we already have matches, the button advances to the next match
+        self.cancel_extend_selection()
+        if getattr(self, 'search_matches', None):
+            self.next_match()
+        else:
+            self.run_search()
 
     def jump_to_match(self):
         if not self.search_matches:
             return
         idx = self.search_matches[self.search_index]
-        self.current_index = idx
+        if idx != self.current_index:
+            self.cancel_extend_selection()
+            self.save_current_edits()
+            self.current_index = idx
         entry = self.orig_entries[idx]
         self.player.setPosition(int(entry.start_time * 1000))
         self.update_subtitle_display()
+        # Update counter before incrementing the index
+        try:
+            current_pos = self.search_index + 1
+            total = getattr(self, 'search_total', len(self.search_matches))
+            self.search_counter.setText(f"{current_pos} of {total}")
+        except Exception:
+            pass
         self.search_index = (self.search_index + 1) % len(self.search_matches)
         self.show_current_segment_in_adjuster()
 
         self.card_created_for_current_segment = False
         self.set_create_button_enabled(True)
+
+    def clear_search_state(self, *_):
+        # Reset button/counter when user changes scope or query
+        self.search_matches = []
+        self.search_index = 0
+        self.search_total = 0
+        if hasattr(self, 'search_btn'):
+            self.search_btn.setText("Search")
+        if hasattr(self, 'search_counter'):
+            self.search_counter.setText("")
+        self.cancel_extend_selection()
 
     def next_match(self):
         self.jump_to_match()
@@ -655,6 +966,8 @@ class PlayerUI(QWidget):
             return
 
         # 3) Gather data
+        # Make sure we capture any in-place edits before creating the card
+        self.save_current_edits()
         current_entry = self.orig_entries[self.current_index]
         trans_entry = (
             self.trans_entries[self.current_index]
@@ -663,6 +976,14 @@ class PlayerUI(QWidget):
         )
         start_sec, end_sec = self.adjuster.get_adjusted_segment()
         deck_name = self.anki_deck_input.text().strip() or "AnkiSlicer"
+        source_text = (self.source_input.text() or "").strip()
+        tags_text = (self.tags_input.text() or "").strip()
+        # Normalize tags from comma/space/semicolon separated to list
+        raw_tags = (
+            [t.strip() for t in re.split(r"[,;\s]+", tags_text) if t.strip()]
+            if tags_text
+            else []
+        )
 
         # 4) Main operation (single try/except)
         try:
@@ -694,16 +1015,22 @@ class PlayerUI(QWidget):
             if not os.path.exists(clip_path):
                 raise FileNotFoundError(f"Clip not found after slicing: {clip_path}")
 
-            # ✅ NEW: Add note to Anki with Markdown → HTML conversion
+            # ✅ Add note to Anki with Markdown → HTML conversion + optional source/tags
+            # Use current editor's Markdown (safer than cached entry text)
+            if hasattr(self.trans_editor, 'toMarkdown'):
+                md_current = self.trans_editor.toMarkdown().strip()
+            else:
+                md_current = self.trans_editor.toPlainText().strip()
+            back_html = format_markdown(md_current) if md_current else "(no translation)"
+            if source_text:
+                back_html = back_html + f"<div style=\"margin-top:8px;color:#666;\"><em>Source: {source_text}</em></div>"
+
             anki.add_note(
-                current_entry.text,
-                (
-                    format_markdown(trans_entry.text)
-                    if trans_entry
-                    else "(no translation)"
-                ),
+                self.orig_input.text().strip() or current_entry.text,
+                back_html,
                 clip_path,
                 deck_name=deck_name,
+                tags=raw_tags,
             )
 
             # Success UI + state
@@ -714,6 +1041,8 @@ class PlayerUI(QWidget):
             )
             self.card_created_for_current_segment = True
             self.set_create_button_enabled(False)
+            # Exit extended mode after successful creation
+            self.cancel_extend_selection()
 
         except Exception as e:
             QMessageBox.critical(

@@ -148,6 +148,9 @@ test_env/
 venv/
 .env/
 
+# Generated audio clips
+anki_clips/
+
 # Spyder project settings
 .spyderproject
 .spyproject

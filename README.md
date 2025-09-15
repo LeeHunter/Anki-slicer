@@ -9,7 +9,7 @@
 <p align="center"><img src="images/app_icon.png#center" alt="application icon" width="200"/></p>
 <p>
 
-Anki‑Slicer is a utility that lets you take an audio file (MP3, WAV, etc.) plus two SRT subtitles (original + translation), preview and flag sentences you want to learn, and then export it into an Anki flashcard deck. 
+Anki‑Slicer is a 'sentence mining' utility that lets you take an audio file (MP3, WAV, etc.) plus two SRT subtitles (original + translation), preview and flag sentences you want to learn, and then export it into an Anki flashcard deck. 
 
 It’s designed for language learners who want to build rich, sentence‑level flashcards with audio + text, all in just a few clicks. 
 
@@ -51,7 +51,7 @@ cd anki-slicer
 pip install -e .
 
 ## Preview
-![Anki-Slicer screenshot](images/SCR-20250912-gpjp.png)
+![Anki-Slicer screenshot](images/screenshot_1.png)
 
 ## App Icon
 

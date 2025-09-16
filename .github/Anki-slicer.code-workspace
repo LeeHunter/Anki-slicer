@@ -7,5 +7,7 @@
 			"path": "../../Library/CloudStorage/Dropbox/chinese/SRTpro"
 		}
 	],
-	"settings": {}
+	"settings": {
+		"chatgpt.openOnStartup": true
+	}
 }

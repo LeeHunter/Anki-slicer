@@ -23,7 +23,7 @@ from anki_slicer.ankiconnect import AnkiConnect
 import tempfile
 import os
 import markdown
-from PyQt6.QtGui import QIcon
+from PyQt6.QtGui import QIcon, QPixmap
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -755,6 +755,34 @@ class PlayerUI(QWidget):
         self.update_extend_button_enabled()
         self.update_debug()
 
+    # ----- Message helpers (use app icon on dialogs) -----
+    def _app_qicon(self) -> QIcon:
+        try:
+            icon_path = Path(__file__).resolve().parent.parent / "images" / "app_icon.png"
+            if icon_path.exists():
+                return QIcon(str(icon_path))
+        except Exception:
+            pass
+        return QIcon()
+
+    def _message(self, icon: QMessageBox.Icon, title: str, text: str):
+        box = QMessageBox(self)
+        # Set titlebar/dock icon
+        box.setWindowIcon(self._app_qicon())
+        box.setIcon(icon)
+        box.setWindowTitle(title)
+        box.setText(text)
+        # Also set the dialog icon pixmap so the in-dialog graphic is our app icon
+        try:
+            icon_path = Path(__file__).resolve().parent.parent / "images" / "app_icon.png"
+            if icon_path.exists():
+                pm = QPixmap(str(icon_path))
+                if not pm.isNull():
+                    box.setIconPixmap(pm.scaled(64, 64))
+        except Exception:
+            pass
+        box.exec()
+
     # Spacebar play/pause
     def toggle_play(self):
         if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
@@ -1138,7 +1166,7 @@ class PlayerUI(QWidget):
     def run_search(self):
         term = self.search_input.text().strip().lower()
         if not term:
-            QMessageBox.warning(self, "Empty Search", "Please enter a search term.")
+            self._message(QMessageBox.Icon.Warning, "Empty Search", "Please enter a search term.")
             return
         self.search_matches = []
         for i, entry in enumerate(self.orig_entries):
@@ -1151,7 +1179,7 @@ class PlayerUI(QWidget):
             if term in orig_text or term in trans_text:
                 self.search_matches.append(i)
         if not self.search_matches:
-            QMessageBox.information(self, "No Results", f"No matches for '{term}'.")
+            self._message(QMessageBox.Icon.Information, "No Results", f"No matches for '{term}'.")
             self.search_btn.setText("Search")
             self.search_counter.setText("")
             return
@@ -1219,8 +1247,8 @@ class PlayerUI(QWidget):
         try:
             if hasattr(anki, "is_available"):
                 if not anki.is_available():
-                    QMessageBox.warning(
-                        self,
+                    self._message(
+                        QMessageBox.Icon.Warning,
                         "Anki Not Running",
                         "Anki with the Anki-Connect add-on must be running.",
                     )
@@ -1229,8 +1257,8 @@ class PlayerUI(QWidget):
                 # Fallback ping
                 anki._invoke("version")
         except Exception:
-            QMessageBox.warning(
-                self,
+            self._message(
+                QMessageBox.Icon.Warning,
                 "Anki Not Running",
                 "Anki with the Anki-Connect add-on must be running.",
             )
@@ -1238,8 +1266,8 @@ class PlayerUI(QWidget):
 
         # 2) Prevent double-create for the same segment
         if self.card_created_for_current_segment:
-            QMessageBox.information(
-                self,
+            self._message(
+                QMessageBox.Icon.Information,
                 "Already Created",
                 "An Anki card has already been created for this segment. Play to a new segment to enable the button.",
             )
@@ -1322,15 +1350,15 @@ class PlayerUI(QWidget):
                 msg = f"Anki card created for segments {segs} in deck '{deck_name}'."
             else:
                 msg = f"Anki card created for segment {self.current_index + 1} in deck '{deck_name}'."
-            QMessageBox.information(self, "Card Created", msg)
+            self._message(QMessageBox.Icon.Information, "Card Created", msg)
             self.card_created_for_current_segment = True
             self.set_create_button_enabled(False)
             # Exit extended mode after successful creation
             self.cancel_extend_selection()
 
         except Exception as e:
-            QMessageBox.critical(
-                self,
+            self._message(
+                QMessageBox.Icon.Critical,
                 "Anki Error",
                 f"Failed to create Anki card: {e}. Ensure Anki and the Anki‑Connect add‑on are running.",
             )

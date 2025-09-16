@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
 )
 from PyQt6.QtCore import QSettings, pyqtSignal
-from PyQt6.QtGui import QIcon
+from PyQt6.QtGui import QIcon, QPixmap
 from pathlib import Path
 from .player import PlayerUI
 from .subs import SRTParser, SubtitleEntry
@@ -271,37 +271,89 @@ class FileSelectorUI(QWidget):
 
     def start_player(self):
         if not (self.audio_path and self.orig_srt and self.trans_srt):
-            QMessageBox.warning(
-                self,
-                "Missing Files",
-                "Please select audio, original SRT, and translation file.",
-            )
+            box = QMessageBox(self)
+            try:
+                icon_path = Path(__file__).resolve().parent.parent / "images" / "app_icon.png"
+                if icon_path.exists():
+                    box.setWindowIcon(QIcon(str(icon_path)))
+            except Exception:
+                pass
+            box.setIcon(QMessageBox.Icon.Warning)
+            try:
+                # Set in-dialog pixmap AFTER setIcon so it takes effect
+                pm = QPixmap(str(icon_path))
+                if not pm.isNull():
+                    box.setIconPixmap(pm.scaled(64, 64))
+            except Exception:
+                pass
+            box.setWindowTitle("Missing Files")
+            box.setText("Please select audio, original SRT, and translation file.")
+            box.exec()
             return
 
         try:
             orig_entries = self._load_original_entries(self.orig_srt)
         except Exception as e:
-            QMessageBox.critical(
-                self, "Subtitle Error", f"Failed to load original subtitles:\n{e}"
-            )
+            box = QMessageBox(self)
+            try:
+                icon_path = Path(__file__).resolve().parent.parent / "images" / "app_icon.png"
+                if icon_path.exists():
+                    box.setWindowIcon(QIcon(str(icon_path)))
+            except Exception:
+                pass
+            box.setIcon(QMessageBox.Icon.Critical)
+            try:
+                pm = QPixmap(str(icon_path))
+                if not pm.isNull():
+                    box.setIconPixmap(pm.scaled(64, 64))
+            except Exception:
+                pass
+            box.setWindowTitle("Subtitle Error")
+            box.setText(f"Failed to load original subtitles:\n{e}")
+            box.exec()
             return
 
         try:
             trans_entries = self._load_translation_entries(self.trans_srt, orig_entries)
         except Exception as e:
-            QMessageBox.critical(
-                self, "Subtitle Error", f"Failed to load translation subtitles:\n{e}"
-            )
+            box = QMessageBox(self)
+            try:
+                icon_path = Path(__file__).resolve().parent.parent / "images" / "app_icon.png"
+                if icon_path.exists():
+                    box.setWindowIcon(QIcon(str(icon_path)))
+            except Exception:
+                pass
+            box.setIcon(QMessageBox.Icon.Critical)
+            try:
+                pm = QPixmap(str(icon_path))
+                if not pm.isNull():
+                    box.setIconPixmap(pm.scaled(64, 64))
+            except Exception:
+                pass
+            box.setWindowTitle("Subtitle Error")
+            box.setText(f"Failed to load translation subtitles:\n{e}")
+            box.exec()
             return
 
         # Helpful info if counts mismatch
         if len(trans_entries) != len(orig_entries):
-            QMessageBox.information(
-                self,
-                "Note",
-                f"Translation entries: {len(trans_entries)} vs Original entries: {len(orig_entries)}.\n"
-                "They have been truncated to the shorter length.",
-            )
+            box = QMessageBox(self)
+            try:
+                icon_path = Path(__file__).resolve().parent.parent / "images" / "app_icon.png"
+                if icon_path.exists():
+                    box.setWindowIcon(QIcon(str(icon_path)))
+            except Exception:
+                pass
+            box.setIcon(QMessageBox.Icon.Information)
+            try:
+                pm = QPixmap(str(icon_path))
+                if not pm.isNull():
+                    box.setIconPixmap(pm.scaled(64, 64))
+            except Exception:
+                pass
+            box.setWindowTitle("Note")
+            box.setText(f"Translation entries: {len(trans_entries)} vs Original entries: {len(orig_entries)}.\nThey have been truncated to the shorter length.")
+            box.exec()
 
         self.player = PlayerUI(self.audio_path, orig_entries, trans_entries)
         self.player.show()

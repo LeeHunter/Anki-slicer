@@ -1,5 +1,6 @@
 import re
 import logging
+import os
 from typing import List, Tuple, Optional
 from dataclasses import dataclass
 
@@ -17,45 +18,87 @@ class SubtitleEntry:
 class SRTParser:
     @staticmethod
     def parse_srt_file(filepath: str) -> List[SubtitleEntry]:
-        """Parse an SRT file and return list of SubtitleEntry objects."""
+        """Parse an SRT file and return list of SubtitleEntry objects.
+        More robust handling of CRLF, BOM, and leading blank lines.
+        """
         try:
-            with open(filepath, "r", encoding="utf-8") as f:
-                content = f.read().strip()
+            with open(filepath, "r", encoding="utf-8", errors="strict") as f:
+                content = f.read()
         except UnicodeDecodeError:
-            with open(filepath, "r", encoding="latin-1") as f:
-                content = f.read().strip()
+            with open(filepath, "r", encoding="latin-1", errors="ignore") as f:
+                content = f.read()
 
-        entries = []
-        blocks = re.split(r"\n\n(?=\d+\n)", content)
+        # Normalize newlines and strip BOM
+        content = content.replace("\r\n", "\n").replace("\r", "\n")
+        content = content.lstrip("\ufeff")
+        # Keep trailing newline structure; don't strip() entire file which can drop first/last lines
 
-        logger.debug("SRT blocks loaded (%d blocks)", len(blocks))
-        for block in blocks:
-            logger.debug("--- BLOCK ---\n%s", block)
+        entries: List[SubtitleEntry] = []
 
-        for block in blocks:
+        # Split on blank line(s) followed by an index line
+        blocks = re.split(r"\n{2,}(?=\d+\s*\n)", content)
+
+        logger.debug("SRT blocks loaded (%d blocks) from %s", len(blocks), filepath)
+
+        debug_dump = bool(os.getenv("ANKI_SLICER_DEBUG"))
+        for raw_block in blocks:
+            block = raw_block.strip("\n")
             if not block.strip():
                 continue
 
-            lines = block.strip().split("\n")
-            if len(lines) < 3:
+            lines = [ln.strip("\ufeff") for ln in block.split("\n")]
+            # Skip leading empties
+            i = 0
+            while i < len(lines) and not lines[i].strip():
+                i += 1
+            if i >= len(lines):
                 continue
 
+            # Index line may contain BOM or spaces
+            idx_line = lines[i].strip()
+            # Some generators omit the numeric index; detect and synthesize
             try:
-                index = int(lines[0])
-                time_line = lines[1]
-                start_str, end_str = time_line.split(" --> ")
+                index = int(re.match(r"\D*(\d+)", idx_line).group(1))
+                i += 1
+            except Exception:
+                # If the first non-empty line is actually the timestamp, synthesize index
+                index = len(entries) + 1
+
+            if i >= len(lines):
+                continue
+
+            # Timestamp line
+            time_line = lines[i].strip()
+            if "-->" not in time_line:
+                # Try next line if index line consumed but timestamp is on following line
+                i += 1
+                if i >= len(lines):
+                    continue
+                time_line = lines[i].strip()
+            try:
+                start_str, end_str = [s.strip() for s in time_line.split("-->")]
                 start_time = SRTParser._parse_timestamp(start_str)
                 end_time = SRTParser._parse_timestamp(end_str)
-                text = "\n".join(lines[2:]).strip()
-                logger.debug("SubtitleEntry index=%s text=\n%s\n", index, text)
-                entries.append(SubtitleEntry(index, start_time, end_time, text))
-            except (ValueError, IndexError) as e:
-                logger.warning(
-                    "Skipping malformed SRT block: %s... Error: %s",
-                    block[:50],
-                    e,
-                )
+            except Exception as e:
+                logger.warning("Skipping block with bad timestamp: %r (%s)", time_line, e)
                 continue
+
+            # Remaining lines are text (preserve internal newlines)
+            text_lines = lines[i + 1 :]
+            text = "\n".join(text_lines).strip()
+
+            if debug_dump and len(entries) < 2:
+                # Dump a detailed view of the first two blocks to help diagnose parsing
+                logger.debug(
+                    "[DEBUG SRT] file=%s idx=%s raw_block=%r lines=%r text=%r",
+                    filepath,
+                    index,
+                    raw_block[:200],
+                    lines,
+                    text,
+                )
+            logger.debug("SubtitleEntry index=%s text_len=%d", index, len(text))
+            entries.append(SubtitleEntry(index, start_time, end_time, text))
 
         return entries
 
@@ -69,7 +112,7 @@ class SRTParser:
         timestamp_str = timestamp_str.replace(",", ".")
 
         # Parse HH:MM:SS.mmm
-        match = re.match(r"(\d{1,2}):(\d{2}):(\d{2})\.(\d{3})", timestamp_str)
+        match = re.match(r"(\d{1,2}):(\d{2}):(\d{2})[\.,](\d{3})", timestamp_str)
         if not match:
             raise ValueError(f"Invalid timestamp format: {timestamp_str}")
 

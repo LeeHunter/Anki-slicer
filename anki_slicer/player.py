@@ -59,6 +59,10 @@ class PlayerUI(QWidget):
         self.trans_entries = trans_entries
         self.current_index = 0
 
+        # Do not mutate parsed subtitles from UI edits; keep user edits separately
+        # so parsing issues are easier to diagnose. Keys are 0-based indices.
+        self.trans_overrides: dict[int, str] = {}
+
         # State
         self.auto_pause_mode = False
         self.slider_active = False
@@ -79,6 +83,8 @@ class PlayerUI(QWidget):
         self.audio_output = QAudioOutput()
         self.audio_output.setVolume(1.0)
         self.player.setAudioOutput(self.audio_output)
+        # Update play/pause UI when state changes
+        self.player.playbackStateChanged.connect(self._on_playback_state_changed)
 
         # Convert to wav for stable playback
         from pydub import AudioSegment
@@ -138,6 +144,18 @@ class PlayerUI(QWidget):
         layout = QVBoxLayout()
         self._updating_ui = False
 
+        # Top bar (grey area): Load files button
+        top_bar = QHBoxLayout()
+        self.load_files_btn = QPushButton("Load files")
+        self.load_files_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.load_files_btn.setStyleSheet(
+            "border:1px solid #dddddd; border-radius:4px; padding:4px 10px; background:#ffffff;"
+        )
+        self.load_files_btn.clicked.connect(self.open_file_selector)
+        top_bar.addWidget(self.load_files_btn)
+        top_bar.addStretch(1)
+        layout.addLayout(top_bar)
+
         # === Text panel (Search + Original/Translation) ===
         text_panel = QFrame()
         text_panel.setStyleSheet("background-color:#ffffff; border:none; border-radius:6px;")
@@ -150,12 +168,14 @@ class PlayerUI(QWidget):
         search_row.setSpacing(6)
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Search subtitles...")
-        # Fixed width sized for ~20 characters
+        # Compact width: just enough for the placeholder text
         try:
-            w20 = self.search_input.fontMetrics().horizontalAdvance("M" * 20) + 24
-            self.search_input.setFixedWidth(w20)
+            ph = self.search_input.placeholderText() or "Search subtitles..."
+            w = self.search_input.fontMetrics().horizontalAdvance(ph) + 20
+            self.search_input.setFixedWidth(max(140, w))
         except Exception:
-            pass
+            # Sensible fallback
+            self.search_input.setFixedWidth(160)
         self.search_btn = QPushButton("Search")
         self.search_btn.clicked.connect(self.on_search_button)
         self.search_input.returnPressed.connect(self.on_search_button)
@@ -180,7 +200,7 @@ class PlayerUI(QWidget):
 
         # === Subtitle displays ===
         base_style = (
-            "font-size: 16px; padding: 6px; background-color: #ffffff; "
+            "padding: 6px; background-color: #ffffff; "
             "border: 1px solid #dddddd; border-radius: 4px; color: #3565B1;"
         )
 
@@ -221,7 +241,12 @@ class PlayerUI(QWidget):
         self.trans_editor = QTextEdit()
         # Accept only plain text editing to avoid HTML paste breaking lists
         self.trans_editor.setAcceptRichText(False)
-        self.trans_editor.setPlaceholderText("Edit translation (Markdown supported)…")
+        # Remove placeholder to avoid any chance of masking empty first entries
+        # (user requested disabling placeholder)
+        try:
+            self.trans_editor.setPlaceholderText("")
+        except Exception:
+            pass
         self.trans_editor.setStyleSheet(base_style)
         self.trans_editor.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
@@ -231,23 +256,33 @@ class PlayerUI(QWidget):
             Qt.ScrollBarPolicy.ScrollBarAsNeeded
         )
         self.trans_editor.textChanged.connect(self.on_translation_changed)
-        # Make translation text smaller (total ~6 points smaller than default)
         try:
-            tf = self.trans_editor.font()
-            if tf.pointSize() > 0:
-                tf.setPointSize(max(6, tf.pointSize() - 6))
-                self.trans_editor.setFont(tf)
             # Reduce document margin so text isn't blocked by padding
             self.trans_editor.document().setDocumentMargin(6)
             self.trans_editor.setViewportMargins(0, 0, 0, 0)
         except Exception:
             pass
 
-        # Fix heights: let Original use its size hint; Translation ~6 lines
-        fm = self.fontMetrics()
-        line_h = fm.lineSpacing()
-        self.orig_input.setMinimumHeight(self.orig_input.sizeHint().height())
-        self.trans_editor.setFixedHeight(int(line_h * 6 + 20))  # ~6 lines + padding
+        # Unify font sizes between Original and Translation to a midpoint of their defaults
+        try:
+            fo = self.orig_input.font()
+            ft = self.trans_editor.font()
+            po = fo.pointSize()
+            pt = ft.pointSize()
+            if po > 0 and pt > 0:
+                mid = max(8, int(round((po + pt) / 2)))
+                fo.setPointSize(mid)
+                ft.setPointSize(mid)
+                self.orig_input.setFont(fo)
+                self.trans_editor.setFont(ft)
+        except Exception:
+            pass
+
+        # Fix heights: Original ~1 line; Translation ~6 lines (based on unified fonts)
+        fm_o = self.orig_input.fontMetrics()
+        fm_t = self.trans_editor.fontMetrics()
+        self.orig_input.setMinimumHeight(int(fm_o.lineSpacing() + 12))
+        self.trans_editor.setFixedHeight(int(fm_t.lineSpacing() * 6 + 20))
 
         text_layout.addWidget(self.orig_input)
         text_layout.addWidget(trans_title)
@@ -290,7 +325,7 @@ class PlayerUI(QWidget):
         self.back_btn.clicked.connect(self.back_to_previous)
         self.forward_btn = QPushButton("Forward")
         self.forward_btn.setStyleSheet("border: 1px solid #dddddd; border-radius: 4px;")
-        self.forward_btn.clicked.connect(self.forward_to_next)
+        self.forward_btn.clicked.connect(self.forward_or_pause)
         self.mode_btn = QPushButton("Switch to Auto‑Pause")
         self.mode_btn.setCheckable(True)
         self.mode_btn.clicked.connect(self.toggle_mode)
@@ -349,8 +384,27 @@ class PlayerUI(QWidget):
         segment_controls_row.addWidget(self.end_plus)
 
         audio_layout.addLayout(segment_controls_row)
+        # Ensure initial inactive styling/text for Extend button
+        try:
+            self.set_extend_button_active_style(False)
+            self.add_next_btn.setText("Extend Selection →→")
+        except Exception:
+            pass
         # Add audio panel to main layout
         layout.addWidget(audio_panel)
+
+        # Optional on-screen debug label (enabled via ANKI_SLICER_DEBUG)
+        self.debug_enabled = bool(os.getenv("ANKI_SLICER_DEBUG"))
+        if self.debug_enabled:
+            self.debug_label = QLabel("")
+            self.debug_label.setStyleSheet(
+                "color:#555; font-family: Menlo, Courier, monospace; font-size: 12px; padding: 4px;"
+            )
+            try:
+                self.debug_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            except Exception:
+                pass
+            layout.addWidget(self.debug_label)
 
         # Connect nudges
         self.start_minus.clicked.connect(lambda: self.nudge_segment("start", -0.05))
@@ -423,9 +477,14 @@ class PlayerUI(QWidget):
 
         self.setLayout(layout)
         self.update_subtitle_display()
-        # Extended selection state
+        # Extended selection state (chainable)
         self.extend_active = False
+        self.extend_count = 0  # number of extra segments appended (0..2)
+        self.extend_direction = 1  # +1 until 3, then -1 back to 0
         self.extend_end_index = None
+        self.extend_base_index = None
+        self.extend_sel_start = None
+        self.extend_sel_end = None
         self.temp_combined_orig = None
         self.temp_combined_trans = None
 
@@ -447,11 +506,26 @@ class PlayerUI(QWidget):
         if getattr(self, "_updating_ui", False):
             return
         try:
+            text = self._get_current_translation_markdown()
             if getattr(self, "extend_active", False):
-                self.temp_combined_trans = self._get_current_translation_markdown()
+                self.temp_combined_trans = text
             else:
-                if self.current_index < len(self.trans_entries):
-                    self.trans_entries[self.current_index].text = self._get_current_translation_markdown()
+                # Avoid creating an override that erases a non-empty parsed value
+                parsed = (
+                    self.trans_entries[self.current_index].text
+                    if self.current_index < len(self.trans_entries)
+                    else ""
+                )
+                if not text.strip() and (parsed or "").strip():
+                    # ignore empty override when parsed has content
+                    pass
+                elif text == (parsed or ""):
+                    # identical to parsed -> clear override if present
+                    if self.current_index in self.trans_overrides:
+                        self.trans_overrides.pop(self.current_index, None)
+                else:
+                    # meaningful user edit
+                    self.trans_overrides[self.current_index] = text
         except Exception:
             pass
         self.card_created_for_current_segment = False
@@ -465,14 +539,7 @@ class PlayerUI(QWidget):
                 self.orig_entries[self.current_index].text = orig_text
         except Exception:
             pass
-        try:
-            # Pull Markdown from the editor to preserve lists/bullets
-            if not getattr(self, "extend_active", False):
-                md = self._get_current_translation_markdown()
-                if self.current_index < len(self.trans_entries):
-                    self.trans_entries[self.current_index].text = md
-        except Exception:
-            pass
+        # No-op for translation: we keep overrides only
 
     # Styled enable/disable for the Create button
     def set_create_button_enabled(self, enabled: bool):
@@ -555,6 +622,22 @@ class PlayerUI(QWidget):
 
         duration_ms = max(0, int((end - start) * 1000))
         self.auto_pause_timer.start(duration_ms)
+        self._update_forward_button_label()
+
+    # Event filter for waveform clicks: toggle play/pause of current selection only
+    def eventFilter(self, obj, event):
+        if obj is self.adjuster and event.type() == QEvent.Type.MouseButtonPress:
+            if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState and self.is_adjusted_preview:
+                # Pause current selection preview
+                self.auto_pause_timer.stop()
+                self.player.pause()
+                self.is_adjusted_preview = False
+                self._update_forward_button_label()
+            else:
+                # Start playing the currently adjusted selection only
+                self.play_adjusted_segment()
+            return True
+        return super().eventFilter(obj, event)
 
     # === Playback + Subtitles ===
     def find_subtitle_index(self, position_sec: float) -> int:
@@ -578,7 +661,8 @@ class PlayerUI(QWidget):
 
     def update_subtitles(self):
         # Don't change subtitle index during adjusted previews
-        if self.slider_active or self.is_adjusted_preview:
+        # Also freeze the index entirely while extended selection is active
+        if self.slider_active or self.is_adjusted_preview or getattr(self, "extend_active", False):
             return
         position_sec = self.player.position() / 1000.0
         new_index = self.find_subtitle_index(position_sec)
@@ -592,11 +676,13 @@ class PlayerUI(QWidget):
         total_sec = max(0.0, (self.total_duration or 0) / 1000.0)
         margin = float(self.MARGIN_SEC)
 
-        # If extended, union with next segment
+        # If extended, union base..end
         if getattr(self, "extend_active", False) and self.extend_end_index is not None and self.extend_end_index < len(self.orig_entries):
-            end_entry = self.orig_entries[self.extend_end_index]
-            sel_start = entry.start_time
-            sel_end = end_entry.end_time
+            base_idx = self.extend_base_index if self.extend_base_index is not None else self.current_index
+            base_entry = self.orig_entries[base_idx]
+            # Use locked selection if available (prevents drifting)
+            sel_start = self.extend_sel_start if self.extend_sel_start is not None else base_entry.start_time
+            sel_end = self.extend_sel_end if self.extend_sel_end is not None else self.orig_entries[self.extend_end_index].end_time
             raw_start = max(0.0, sel_start - margin)
             raw_end = sel_end + margin
         else:
@@ -611,6 +697,7 @@ class PlayerUI(QWidget):
 
         self.card_created_for_current_segment = False
         self.set_create_button_enabled(True)
+        self.update_debug()
 
     def update_subtitle_display(self):
         orig_entry = self.orig_entries[self.current_index]
@@ -620,33 +707,38 @@ class PlayerUI(QWidget):
             else None
         )
 
-        # Determine whether to show combined (extended) text
-        show_orig = orig_entry.text
-        show_trans = trans_entry.text if trans_entry else ""
-        if getattr(self, "extend_active", False) and self.extend_end_index is not None:
-            # Combine with the next entry
-            if self.extend_end_index < len(self.orig_entries):
-                next_orig = self.orig_input.text()  # current edited text
-                # Use current editor markdown for current part; then append next
-                show_orig = (next_orig or orig_entry.text) + " " + self.orig_entries[self.extend_end_index].text
-                next_trans = (
-                    self.trans_entries[self.extend_end_index].text
-                    if self.extend_end_index < len(self.trans_entries)
-                    else ""
-                )
-                current_md = self._get_current_translation_markdown()
-                show_trans = (current_md or (trans_entry.text if trans_entry else ""))
-                if next_trans:
-                    show_trans = (show_trans + "\n" + next_trans).strip()
-            # Cache combined in temp vars
-            self.temp_combined_orig = show_orig
-            self.temp_combined_trans = show_trans
+        # Decide what to show based on extended mode.
+        if getattr(self, "extend_active", False) and self.extend_end_index is not None and self.extend_end_index < len(self.orig_entries):
+            # Always rebuild combined display from the anchored base to end to avoid omissions
+            base_idx = self.extend_base_index if self.extend_base_index is not None else self.current_index
+            end_idx = self.extend_end_index
+            orig_parts = [self.orig_entries[i].text for i in range(base_idx, end_idx + 1)]
+            show_orig = " ".join(p.strip() for p in orig_parts if p).strip()
+            # Build translation strictly from parsed translation entries only (no fallback).
+            trans_parts: list[str] = []
+            for i in range(base_idx, end_idx + 1):
+                # Use override if present; otherwise parsed text
+                if i in self.trans_overrides:
+                    t = self.trans_overrides[i]
+                else:
+                    t = self.trans_entries[i].text if i < len(self.trans_entries) else ""
+                # Preserve empty lines to reflect missing translations explicitly
+                trans_parts.append(t or "")
+            show_trans = "\n".join(trans_parts)
+        else:
+            show_orig = orig_entry.text
+            # Always show exactly what was parsed/overridden for translation (no fallback)
+            if self.current_index in self.trans_overrides:
+                show_trans = self.trans_overrides[self.current_index]
+            else:
+                show_trans = trans_entry.text if trans_entry else ""
 
         # Populate editors without triggering change handlers
         try:
             self._updating_ui = True
             self.orig_input.setText(show_orig)
             if show_trans:
+                # Render Markdown in the editor while still disallowing rich-text pastes
                 if hasattr(self.trans_editor, 'setMarkdown'):
                     self.trans_editor.setMarkdown(show_trans)
                 else:
@@ -661,6 +753,7 @@ class PlayerUI(QWidget):
         self.card_created_for_current_segment = False
         self.set_create_button_enabled(True)
         self.update_extend_button_enabled()
+        self.update_debug()
 
     # Spacebar play/pause
     def toggle_play(self):
@@ -668,6 +761,7 @@ class PlayerUI(QWidget):
             self.auto_pause_timer.stop()
             self.player.pause()
             self.show_current_segment_in_adjuster()
+            self._update_forward_button_label()
             return
 
         # Resume or start at current subtitle start
@@ -683,11 +777,12 @@ class PlayerUI(QWidget):
             self.player.setPosition(int(entry.start_time * 1000))
 
         self.player.play()
+        self._update_forward_button_label()
 
         # Schedule auto-pause if enabled
         if self.auto_pause_mode:
-            entry = self.orig_entries[self.current_index]
-            remaining_ms = max(0, int(entry.end_time * 1000 - self.player.position()))
+            end_time = self._current_playback_end_time()
+            remaining_ms = max(0, int(end_time * 1000 - self.player.position()))
             self.auto_pause_timer.stop()
             self.auto_pause_timer.start(remaining_ms)
 
@@ -700,6 +795,8 @@ class PlayerUI(QWidget):
 
         self.pending_index = min(self.current_index + 1, len(self.orig_entries) - 1)
         self.waiting_for_resume = True
+        # Update the Forward button label when paused
+        self._update_forward_button_label()
 
     # Mode toggle: enforce immediate scheduling if already playing
     def toggle_mode(self):
@@ -715,8 +812,8 @@ class PlayerUI(QWidget):
         ):
             pos_sec = self.player.position() / 1000.0
             self.current_index = self.find_subtitle_index(pos_sec)
-            entry = self.orig_entries[self.current_index]
-            remaining_ms = max(0, int(entry.end_time * 1000 - self.player.position()))
+            end_time = self._current_playback_end_time()
+            remaining_ms = max(0, int(end_time * 1000 - self.player.position()))
             self.auto_pause_timer.start(remaining_ms)
 
     # === Forward/Back ===
@@ -797,9 +894,46 @@ class PlayerUI(QWidget):
         self.total_duration = dur
         self.pos_slider.setRange(0, dur)
         self.show_current_segment_in_adjuster()
+        self.update_debug()
+
+    def _on_playback_state_changed(self, state):
+        self._update_forward_button_label()
+
+    def _update_forward_button_label(self):
+        if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            self.forward_btn.setText("Pause")
+        else:
+            self.forward_btn.setText("Forward")
+        self.update_debug()
+
+    def forward_or_pause(self):
+        # If playing, this acts as a Pause button; otherwise it advances
+        if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            self.auto_pause_timer.stop()
+            self.player.pause()
+            self._update_forward_button_label()
+        else:
+            self.forward_to_next()
+        self.update_debug()
+
+    def _current_playback_end_time(self) -> float:
+        if getattr(self, "extend_active", False) and self.extend_end_index is not None and self.extend_end_index < len(self.orig_entries):
+            if self.extend_sel_end is not None:
+                return self.extend_sel_end
+            return self.orig_entries[self.extend_end_index].end_time
+        return self.orig_entries[self.current_index].end_time
+
+    def _infer_index_from_adjuster_start(self) -> int:
+        try:
+            sel_start, _ = self.adjuster.get_adjusted_segment()
+            # Nudge inside the segment to avoid boundary ambiguity
+            return self.find_subtitle_index(max(0.0, sel_start + 1e-6))
+        except Exception:
+            return self.current_index
 
     def seek(self, pos):
         self.player.setPosition(pos)
+        self.update_debug()
 
     @staticmethod
     def format_time(ms: int) -> str:
@@ -809,6 +943,7 @@ class PlayerUI(QWidget):
 
     # Helpers for translation markdown access
     def _get_current_translation_markdown(self) -> str:
+        # Prefer Markdown so bullets/lists/etc. are preserved when exporting to Anki
         if hasattr(self.trans_editor, 'toMarkdown'):
             return self.trans_editor.toMarkdown()
         return self.trans_editor.toPlainText()
@@ -816,6 +951,71 @@ class PlayerUI(QWidget):
     def update_extend_button_enabled(self):
         enabled = self.current_index < len(self.orig_entries) - 1
         self.add_next_btn.setEnabled(enabled)
+        self.update_debug()
+
+    def update_debug(self):
+        if not getattr(self, 'debug_enabled', False):
+            return
+        try:
+            base_idx = self.extend_base_index if getattr(self, 'extend_base_index', None) is not None else self.current_index
+            end_idx = self.extend_end_index if getattr(self, 'extend_end_index', None) is not None else self.current_index
+            sel_start, sel_end = self.adjuster.get_adjusted_segment()
+            playing = self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
+            pos_ms = self.player.position()
+            # Peek at translation parts for troubleshooting
+            # Effective translation values (consider overrides)
+            t0 = (
+                self.trans_overrides.get(base_idx)
+                if base_idx in self.trans_overrides
+                else (self.trans_entries[base_idx].text if base_idx < len(self.trans_entries) else "")
+            )
+            t1 = (
+                self.trans_overrides.get(base_idx + 1)
+                if (base_idx + 1) in self.trans_overrides
+                else (self.trans_entries[base_idx + 1].text if base_idx + 1 < len(self.trans_entries) else "")
+            )
+            t0s = (t0 or "").replace("\n", " ⏎ ")[:40]
+            t1s = (t1 or "").replace("\n", " ⏎ ")[:40]
+            peek = (
+                f"t0len={len((t0 or '').strip())} t1len={len((t1 or '').strip())} "
+                f"t0='{t0s}' t1='{t1s}'"
+            )
+            text = (
+                f"idx={self.current_index+1} base={base_idx+1} end={end_idx+1} "
+                f"count={getattr(self,'extend_count',0)} dir={getattr(self,'extend_direction',1)} active={getattr(self,'extend_active',False)} "
+                f"sel={sel_start:.3f}-{sel_end:.3f} pos={pos_ms/1000.0:.3f}s playing={playing} autopause={self.auto_pause_mode} {peek}"
+            )
+            self.debug_label.setText(text)
+        except Exception:
+            pass
+
+    def open_file_selector(self):
+        try:
+            self.auto_pause_timer.stop()
+            if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+                self.player.pause()
+        except Exception:
+            pass
+        # Launch the file selector to load a new set of files
+        try:
+            from .ui import FileSelectorUI
+            # Keep a reference so it doesn't get garbage-collected immediately
+            self._selector_window = FileSelectorUI()
+            try:
+                # When selector launches a new player, close this one
+                self._selector_window.playerLaunched.connect(self._on_new_player_launched)
+            except Exception:
+                pass
+            self._selector_window.show()
+        except Exception:
+            pass
+        # Do not close this window immediately; it will close when the selector launches the new player
+
+    def _on_new_player_launched(self):
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def set_extend_button_active_style(self, active: bool):
         if active:
@@ -827,33 +1027,112 @@ class PlayerUI(QWidget):
                 "border:1px solid #dddddd; border-radius:4px; padding:6px 16px; background:#ffffff; color:#000;"
             )
 
-    def toggle_extend_selection(self):
-        if getattr(self, "extend_active", False):
-            self.cancel_extend_selection()
-        else:
-            self.activate_extend_selection()
+    def refresh_extend_button_ui(self):
+        try:
+            if getattr(self, 'extend_active', False) and getattr(self, 'extend_count', 0) > 0:
+                self.set_extend_button_active_style(True)
+                self.add_next_btn.setText(f"Extend Selection →→ ({self.extend_count})")
+            else:
+                self.set_extend_button_active_style(False)
+                self.add_next_btn.setText("Extend Selection →→")
+        except Exception:
+            pass
 
-    def activate_extend_selection(self):
-        if self.current_index >= len(self.orig_entries) - 1:
+    def toggle_extend_selection(self):
+        # Stop current preview and pause so rapid clicks always respond
+        try:
+            self.auto_pause_timer.stop()
+            self.is_adjusted_preview = False
+            if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+                self.player.pause()
+        except Exception:
+            pass
+        # Cycle extend count: 0→1→2→1→0 ... (max two extra segments)
+        base_idx_for_limits = (
+            self.extend_base_index if self.extend_active and self.extend_base_index is not None else self.current_index
+        )
+        max_extras = min(2, len(self.orig_entries) - 1 - base_idx_for_limits)
+        if max_extras <= 0:
+            self.cancel_extend_selection()
             return
-        self.extend_active = True
-        self.extend_end_index = self.current_index + 1
-        self.set_extend_button_active_style(True)
-        # Refresh display and adjuster to reflect combined segment
+        if not self.extend_active:
+            self.extend_count = 0
+            self.extend_direction = 1
+            # Anchor base to the current adjusted selection start (what user sees)
+            self.extend_base_index = self._infer_index_from_adjuster_start()
+        next_count = self.extend_count + self.extend_direction
+        if next_count > max_extras:
+            self.extend_direction = -1
+            next_count = self.extend_count + self.extend_direction
+        elif next_count < 0:
+            next_count = 0
+        self.set_extend_count(next_count)
+        self.refresh_extend_button_ui()
+        self.update_debug()
+
+    def set_extend_count(self, count: int):
+        count = max(0, min(2, count))
+        base_idx = self.extend_base_index if self.extend_base_index is not None else self.current_index
+        max_extras = min(2, len(self.orig_entries) - 1 - base_idx)
+        count = min(count, max_extras)
+        self.extend_count = count
+        self.extend_active = count > 0
+        if not self.extend_active:
+            # Capture base idx before reset, so we can snap back
+            base_idx_local = base_idx
+            self.cancel_extend_selection()
+            try:
+                # Snap selection back to base and pause
+                self.current_index = base_idx_local
+                entry = self.orig_entries[base_idx_local]
+                self.player.pause()
+                self.player.setPosition(int(entry.start_time * 1000))
+            except Exception:
+                pass
+            self.update_subtitle_display()
+            self.refresh_extend_button_ui()
+            return
+        # Compute end index and lock selection
+        self.extend_end_index = base_idx + self.extend_count
+        self.extend_sel_start = self.orig_entries[base_idx].start_time
+        self.extend_sel_end = self.orig_entries[self.extend_end_index].end_time
+        # Force the visible/current index to the anchored base to prevent UI drift
+        self.current_index = base_idx
+        # Build combined texts across range
+        orig_parts = [self.orig_entries[i].text for i in range(base_idx, self.extend_end_index + 1)]
+        self.temp_combined_orig = " ".join(p.strip() for p in orig_parts if p).strip()
+        trans_parts = []
+        for i in range(base_idx, self.extend_end_index + 1):
+            if i < len(self.trans_entries):
+                t = self.trans_entries[i].text
+                if t:
+                    trans_parts.append(t.strip())
+        self.temp_combined_trans = "\n".join(trans_parts).strip()
+        # Visuals + playback
+        self.refresh_extend_button_ui()
         self.update_subtitle_display()
         self.show_current_segment_in_adjuster()
+        self.play_adjusted_segment()
+        self.update_debug()
 
     def cancel_extend_selection(self):
         if not getattr(self, "extend_active", False):
             return
         self.extend_active = False
+        self.extend_count = 0
+        self.extend_direction = 1
         self.extend_end_index = None
+        self.extend_base_index = None
+        self.extend_sel_start = None
+        self.extend_sel_end = None
         self.temp_combined_orig = None
         self.temp_combined_trans = None
         self.set_extend_button_active_style(False)
+        self.add_next_btn.setText("Extend Selection →→")
         # Restore editors to current segment only
         self.update_subtitle_display()
         self.show_current_segment_in_adjuster()
+        self.update_debug()
 
     # === Search Features ===
     def run_search(self):
@@ -923,6 +1202,7 @@ class PlayerUI(QWidget):
         if hasattr(self, 'search_counter'):
             self.search_counter.setText("")
         self.cancel_extend_selection()
+        self.update_debug()
 
     def next_match(self):
         self.jump_to_match()
@@ -1034,11 +1314,15 @@ class PlayerUI(QWidget):
             )
 
             # Success UI + state
-            QMessageBox.information(
-                self,
-                "Card Created",
-                f"Anki card created for segment {self.current_index + 1} in deck '{deck_name}'.",
-            )
+            # Friendly message shows combined segment indices when extended
+            if getattr(self, "extend_active", False) and self.extend_end_index is not None:
+                base_idx = self.extend_base_index if self.extend_base_index is not None else self.current_index
+                end_idx = self.extend_end_index
+                segs = "+".join(str(i + 1) for i in range(base_idx, end_idx + 1))
+                msg = f"Anki card created for segments {segs} in deck '{deck_name}'."
+            else:
+                msg = f"Anki card created for segment {self.current_index + 1} in deck '{deck_name}'."
+            QMessageBox.information(self, "Card Created", msg)
             self.card_created_for_current_segment = True
             self.set_create_button_enabled(False)
             # Exit extended mode after successful creation

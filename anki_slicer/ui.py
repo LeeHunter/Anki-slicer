@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QMessageBox,
 )
-from PyQt6.QtCore import QSettings
+from PyQt6.QtCore import QSettings, pyqtSignal
 from PyQt6.QtGui import QIcon
 from pathlib import Path
 from .player import PlayerUI
@@ -24,6 +24,8 @@ TIMESTAMP_RE = re.compile(
 
 
 class FileSelectorUI(QWidget):
+    # Emitted when a new Player window is launched
+    playerLaunched = pyqtSignal()
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Anki‑Slicer – Select Files")
@@ -73,12 +75,42 @@ class FileSelectorUI(QWidget):
 
         self.player = None
 
+        # In debug runs, prefill last-used files to speed iteration
+        try:
+            import os as _os
+            if _os.getenv("ANKI_SLICER_DEBUG"):
+                self._prefill_last_paths_debug()
+        except Exception:
+            pass
+
     def _get_last_dir(self) -> str:
         return self.settings.value("last_directory", "")
 
     def _set_last_dir(self, filepath: str):
         if filepath:
             self.settings.setValue("last_directory", str(filepath.rsplit("/", 1)[0]))
+
+    def _prefill_last_paths_debug(self):
+        """Prefill the last selected files (if they still exist) when in debug mode.
+        This only sets the fields; it does not auto-start the player.
+        """
+        import os
+        a = self.settings.value("last_audio_path", "") or ""
+        o = self.settings.value("last_orig_srt", "") or ""
+        t = self.settings.value("last_trans_srt", "") or ""
+
+        if a and os.path.exists(a):
+            self.audio_path = a
+            self.audio_label.setText(a)
+            self._set_last_dir(a)
+        if o and os.path.exists(o):
+            self.orig_srt = o
+            self.orig_label.setText(o)
+            self._set_last_dir(o)
+        if t and os.path.exists(t):
+            self.trans_srt = t
+            self.trans_label.setText(t)
+            self._set_last_dir(t)
 
     # ---------- File Selectors ----------
 
@@ -95,6 +127,7 @@ class FileSelectorUI(QWidget):
             self.audio_path = path
             self.audio_label.setText(path)
             self._set_last_dir(path)
+            self.settings.setValue("last_audio_path", path)
 
     def select_orig(self):
         last_dir = self._get_last_dir()
@@ -109,6 +142,7 @@ class FileSelectorUI(QWidget):
             self.orig_srt = path
             self.orig_label.setText(path)
             self._set_last_dir(path)
+            self.settings.setValue("last_orig_srt", path)
 
     def select_trans(self):
         last_dir = self._get_last_dir()
@@ -123,6 +157,7 @@ class FileSelectorUI(QWidget):
             self.trans_srt = path
             self.trans_label.setText(path)
             self._set_last_dir(path)
+            self.settings.setValue("last_trans_srt", path)
 
     # ---------- Subtitle Loading ----------
 
@@ -270,4 +305,9 @@ class FileSelectorUI(QWidget):
 
         self.player = PlayerUI(self.audio_path, orig_entries, trans_entries)
         self.player.show()
+        try:
+            # Notify listeners (e.g., an existing Player) to close
+            self.playerLaunched.emit()
+        except Exception:
+            pass
         self.close()

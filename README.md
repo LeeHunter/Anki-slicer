@@ -99,6 +99,15 @@ For example you can use AI to add explanations, grammar notes, transliterations 
 This text appears on the answer side of the Anki card. Note that Anki uses RTF formatting. 
     
 
+## Conversation Log Workflow
+
+Codex conversations can disappear after session resets. Keep a private log locally (ignored by Git) with:
+
+- `python scripts/append_conversation_log.py --speaker user "Message"` to capture quick notes.
+- `python scripts/append_conversation_log.py --speaker assistant --stdin < transcript.txt` (or `pbpaste | python scripts/append_conversation_log.py --speaker assistant --stdin`) for longer chunks.
+- Logs live in `conversation_logs/` which is already ignored via `.gitignore`.
+- Each entry is timestamped and tagged with the provided speaker label.
+
 ## 🤝 Contributing
 
 Contributions are welcome!

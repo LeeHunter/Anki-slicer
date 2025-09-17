@@ -218,3 +218,6 @@ anki_clips/
 *.wav
 *.mp3
 *.SRT 
+
+# Local conversation logs for Codex sessions
+conversation_logs/

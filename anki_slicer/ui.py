@@ -28,7 +28,7 @@ class FileSelectorUI(QWidget):
     playerLaunched = pyqtSignal()
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Anki‑Slicer – Select Files")
+        self.setWindowTitle(self.tr("Anki-Slicer – Select Files"))
         self.setMinimumSize(400, 200)
 
         # Set window icon if present
@@ -48,15 +48,15 @@ class FileSelectorUI(QWidget):
         layout = QVBoxLayout(self)
 
         # Labels
-        self.audio_label = QLabel("No audio file selected")
-        self.orig_label = QLabel("No original subs selected")
-        self.trans_label = QLabel("No translation subs selected")
+        self.audio_label = QLabel(self.tr("No audio file selected"))
+        self.orig_label = QLabel(self.tr("No original subs selected"))
+        self.trans_label = QLabel(self.tr("No translation subs selected"))
 
         # Buttons
-        self.audio_btn = QPushButton("Select Audio file")
-        self.orig_btn = QPushButton("Select Original Subtitles (.srt)")
-        self.trans_btn = QPushButton("Select Translation (.srt or .txt)")
-        self.start_btn = QPushButton("Start")
+        self.audio_btn = QPushButton(self.tr("Select Audio file"))
+        self.orig_btn = QPushButton(self.tr("Select Original Subtitles (.srt)"))
+        self.trans_btn = QPushButton(self.tr("Select Translation (.srt or .txt)"))
+        self.start_btn = QPushButton(self.tr("Start"))
 
         layout.addWidget(self.audio_label)
         layout.addWidget(self.audio_btn)
@@ -118,9 +118,9 @@ class FileSelectorUI(QWidget):
         last_dir = self._get_last_dir()
         path, _ = QFileDialog.getOpenFileName(
             self,
-            "Select Audio File",
+            self.tr("Select Audio File"),
             last_dir,
-            "Audio Files (*.mp3 *.wav *.m4a *.flac *.ogg *.aac);;All Files (*)",
+            self.tr("Audio Files (*.mp3 *.wav *.m4a *.flac *.ogg *.aac);;All Files (*)"),
             options=QFileDialog.Option.DontUseNativeDialog,
         )
         if path:
@@ -133,9 +133,9 @@ class FileSelectorUI(QWidget):
         last_dir = self._get_last_dir()
         path, _ = QFileDialog.getOpenFileName(
             self,
-            "Select Original Subtitles",
+            self.tr("Select Original Subtitles"),
             last_dir,
-            "Subtitle Files (*.srt);;All Files (*)",
+            self.tr("Subtitle Files (*.srt);;All Files (*)"),
             options=QFileDialog.Option.DontUseNativeDialog,
         )
         if path:
@@ -148,9 +148,9 @@ class FileSelectorUI(QWidget):
         last_dir = self._get_last_dir()
         path, _ = QFileDialog.getOpenFileName(
             self,
-            "Select Translation Subtitles",
+            self.tr("Select Translation Subtitles"),
             last_dir,
-            "Subtitle/Text Files (*.srt *.txt);;All Files (*)",
+            self.tr("Subtitle/Text Files (*.srt *.txt);;All Files (*)"),
             options=QFileDialog.Option.DontUseNativeDialog,
         )
         if path:
@@ -239,7 +239,7 @@ class FileSelectorUI(QWidget):
 
     def _load_original_entries(self, path: str):
         if self._ext(path) != "srt":
-            raise ValueError("Original subtitles must be .srt with timing.")
+            raise ValueError(self.tr("Original subtitles must be .srt with timing."))
         return SRTParser.parse_srt_file(path)
 
     def _load_translation_entries(self, path: str, orig_entries):
@@ -265,7 +265,7 @@ class FileSelectorUI(QWidget):
                 )
             return entries
 
-        raise ValueError(f"Unsupported translation format: .{ext}")
+        raise ValueError(self.tr("Unsupported translation format: .{ext}").format(ext=ext))
 
     # ---------- Start Player ----------
 
@@ -286,8 +286,8 @@ class FileSelectorUI(QWidget):
                     box.setIconPixmap(pm.scaled(64, 64))
             except Exception:
                 pass
-            box.setWindowTitle("Missing Files")
-            box.setText("Please select audio, original SRT, and translation file.")
+            box.setWindowTitle(self.tr("Missing Files"))
+            box.setText(self.tr("Please select audio, original SRT, and translation file."))
             box.exec()
             return
 
@@ -308,8 +308,10 @@ class FileSelectorUI(QWidget):
                     box.setIconPixmap(pm.scaled(64, 64))
             except Exception:
                 pass
-            box.setWindowTitle("Subtitle Error")
-            box.setText(f"Failed to load original subtitles:\n{e}")
+            box.setWindowTitle(self.tr("Subtitle Error"))
+            box.setText(
+                self.tr("Failed to load original subtitles:\n{error}").format(error=e)
+            )
             box.exec()
             return
 
@@ -330,8 +332,10 @@ class FileSelectorUI(QWidget):
                     box.setIconPixmap(pm.scaled(64, 64))
             except Exception:
                 pass
-            box.setWindowTitle("Subtitle Error")
-            box.setText(f"Failed to load translation subtitles:\n{e}")
+            box.setWindowTitle(self.tr("Subtitle Error"))
+            box.setText(
+                self.tr("Failed to load translation subtitles:\n{error}").format(error=e)
+            )
             box.exec()
             return
 
@@ -351,8 +355,14 @@ class FileSelectorUI(QWidget):
                     box.setIconPixmap(pm.scaled(64, 64))
             except Exception:
                 pass
-            box.setWindowTitle("Note")
-            box.setText(f"Translation entries: {len(trans_entries)} vs Original entries: {len(orig_entries)}.\nThey have been truncated to the shorter length.")
+            box.setWindowTitle(self.tr("Note"))
+            box.setText(
+                self.tr(
+                    "Translation entries: {translation_count} vs Original entries: {original_count}.\nThey have been truncated to the shorter length."
+                ).format(
+                    translation_count=len(trans_entries), original_count=len(orig_entries)
+                )
+            )
             box.exec()
 
         self.player = PlayerUI(self.audio_path, orig_entries, trans_entries)

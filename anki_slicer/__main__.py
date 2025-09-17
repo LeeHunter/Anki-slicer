@@ -1,6 +1,7 @@
 import os
 import logging
 from .player import PlayerUI
+from .i18n import load_translator
 
 
 def main():
@@ -14,6 +15,9 @@ def main():
     logging.basicConfig(level=level, format="%(levelname)s:%(name)s:%(message)s")
 
     app = QApplication([])
+
+    # Allow overriding locale via env, otherwise use system default.
+    load_translator(app, os.getenv("ANKI_SLICER_LOCALE"))
 
     # Set a custom app/window icon if available
     try:

@@ -42,7 +42,7 @@ class PlayerUI(QWidget):
         trans_entries: list[SubtitleEntry],
     ):
         super().__init__()
-        self.setWindowTitle("Anki-slicer Player")
+        self.setWindowTitle(self.tr("Anki-slicer Player"))
         self.setMinimumSize(950, 650)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
@@ -118,7 +118,7 @@ class PlayerUI(QWidget):
         self.timer.start()
 
         # Keyboard shortcut for Play/Pause (space bar)
-        self.play_action = QAction("Play/Pause", self)
+        self.play_action = QAction(self.tr("Play/Pause"), self)
         self.play_action.setShortcut(QKeySequence("Space"))
         self.play_action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
         self.play_action.triggered.connect(self.toggle_play)
@@ -146,7 +146,7 @@ class PlayerUI(QWidget):
 
         # Top bar (grey area): Load files button
         top_bar = QHBoxLayout()
-        self.load_files_btn = QPushButton("Load files")
+        self.load_files_btn = QPushButton(self.tr("Load files"))
         self.load_files_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.load_files_btn.setStyleSheet(
             "border:1px solid #dddddd; border-radius:4px; padding:4px 10px; background:#ffffff;"
@@ -167,7 +167,7 @@ class PlayerUI(QWidget):
         search_row = QHBoxLayout()
         search_row.setSpacing(6)
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Search subtitles...")
+        self.search_input.setPlaceholderText(self.tr("Search subtitles..."))
         # Compact width: just enough for the placeholder text
         try:
             ph = self.search_input.placeholderText() or "Search subtitles..."
@@ -176,7 +176,7 @@ class PlayerUI(QWidget):
         except Exception:
             # Sensible fallback
             self.search_input.setFixedWidth(160)
-        self.search_btn = QPushButton("Search")
+        self.search_btn = QPushButton(self.tr("Search"))
         self.search_btn.clicked.connect(self.on_search_button)
         self.search_input.returnPressed.connect(self.on_search_button)
         # Make button size follow its label (fixed) with modest padding
@@ -187,7 +187,7 @@ class PlayerUI(QWidget):
         self.search_counter = QLabel("")
         self.search_counter.setStyleSheet("color:#666; font-size:12px; padding-left:6px;")
         # Reserve fixed width so search box doesn't resize when counter appears
-        reserve_w = self.fontMetrics().horizontalAdvance("999 of 999") + 12
+        reserve_w = self.fontMetrics().horizontalAdvance(self.tr("999 of 999")) + 12
         self.search_counter.setFixedWidth(reserve_w)
 
         self.search_input.textChanged.connect(self.clear_search_state)
@@ -204,14 +204,14 @@ class PlayerUI(QWidget):
             "border: 1px solid #dddddd; border-radius: 4px; color: #3565B1;"
         )
 
-        trans_title = QLabel("Translation")
+        trans_title = QLabel(self.tr("Translation"))
         trans_title.setStyleSheet(
             "font-size: 18px; font-weight: bold; color: #E0E0E0;"
         )
 
         # Header row for Original label (progress removed)
         orig_header_row = QHBoxLayout()
-        orig_title = QLabel("Original")
+        orig_title = QLabel(self.tr("Original"))
         orig_title.setStyleSheet(
             "font-size: 18px; font-weight: bold; color: #E0E0E0;"
         )
@@ -221,7 +221,7 @@ class PlayerUI(QWidget):
 
         # Original: editable single-line
         self.orig_input = QLineEdit()
-        self.orig_input.setPlaceholderText("Edit original subtitle…")
+        self.orig_input.setPlaceholderText(self.tr("Edit original subtitle…"))
         # Use a leaner style for the single-line editor to prevent visual clipping
         self.orig_input.setStyleSheet(
             "border: 1px solid #dddddd; border-radius: 4px; "
@@ -317,16 +317,21 @@ class PlayerUI(QWidget):
         slider_row.addWidget(self.time_label)
         audio_layout.addLayout(slider_row)
 
+        # === Waveform widget ===
+        self.adjuster = SegmentAdjusterWidget(self.mp3_path, self.player)
+        self.adjuster.setFixedHeight(160)
+        audio_layout.addWidget(self.adjuster)
+
         # === Playback controls ===
-        # Swap positions: Back on the left, Forward on the right.
+        # Swap positions: Back on the left, Forward on the right. Placed under the waveform per request.
         controls = QHBoxLayout()
-        self.back_btn = QPushButton("Back")
+        self.back_btn = QPushButton(self.tr("Back"))
         self.back_btn.setStyleSheet("border: 1px solid #dddddd; border-radius: 4px;")
         self.back_btn.clicked.connect(self.back_to_previous)
-        self.forward_btn = QPushButton("Forward")
+        self.forward_btn = QPushButton(self.tr("Forward"))
         self.forward_btn.setStyleSheet("border: 1px solid #dddddd; border-radius: 4px;")
         self.forward_btn.clicked.connect(self.forward_or_pause)
-        self.mode_btn = QPushButton("Switch to Auto‑Pause")
+        self.mode_btn = QPushButton(self.tr("Switch to Auto-Pause"))
         self.mode_btn.setCheckable(True)
         self.mode_btn.clicked.connect(self.toggle_mode)
         # Keep mode button color stable (white in both states)
@@ -338,17 +343,13 @@ class PlayerUI(QWidget):
         controls.addWidget(self.forward_btn)
         controls.addWidget(self.mode_btn)
         audio_layout.addLayout(controls)
-
-        # === Waveform widget ===
-        self.adjuster = SegmentAdjusterWidget(self.mp3_path, self.player)
-        self.adjuster.setFixedHeight(160)
-        audio_layout.addWidget(self.adjuster)
+        audio_layout.addSpacing(12)
 
         # === Segment adjustment controls ===
         segment_controls_row = QHBoxLayout()
         segment_controls_row.setSpacing(10)
 
-        start_label = QLabel("Adjust Start:")
+        start_label = QLabel(self.tr("Adjust Start:"))
         start_label.setStyleSheet("font-weight: bold;")
         self.start_minus = QPushButton("−")
         self.start_plus = QPushButton("+")
@@ -362,17 +363,17 @@ class PlayerUI(QWidget):
         segment_controls_row.addStretch(1)
 
         # Extend Selection between start and end controls
-        self.add_next_btn = QPushButton("Extend Selection →→")
+        self.add_next_btn = QPushButton(self.tr("Extend Selection →→"))
         self.add_next_btn.clicked.connect(self.toggle_extend_selection)
         self.add_next_btn.setMinimumWidth(200)
         self.add_next_btn.setStyleSheet(
-            "border: 1px solid #dddddd; border-radius: 4px; padding: 6px 16px; background:#ffffff; color:#000;"
+            "border: 1px solid #dddddd; border-radius: 4px; padding: 6px 16px; background:#ffffff; color:#000; font-weight:bold;"
         )
         segment_controls_row.addWidget(self.add_next_btn)
 
         segment_controls_row.addStretch(1)
 
-        end_label = QLabel("Adjust End:")
+        end_label = QLabel(self.tr("Adjust End:"))
         end_label.setStyleSheet("font-weight: bold;")
         self.end_minus = QPushButton("−")
         self.end_plus = QPushButton("+")
@@ -387,7 +388,7 @@ class PlayerUI(QWidget):
         # Ensure initial inactive styling/text for Extend button
         try:
             self.set_extend_button_active_style(False)
-            self.add_next_btn.setText("Extend Selection →→")
+            self.add_next_btn.setText(self.tr("Extend Selection →→"))
         except Exception:
             pass
         # Add audio panel to main layout
@@ -433,33 +434,38 @@ class PlayerUI(QWidget):
             self.settings.value("anki_deck_name", "AnkiSlicer")
         )
         self.anki_deck_input.textChanged.connect(self.save_anki_deck_name)
-        form.addRow("Anki Deck:", self.anki_deck_input)
+        form.addRow(self.tr("Anki Deck:"), self.anki_deck_input)
 
         # Source field
         self.source_input = QLineEdit()
         self.source_input.setStyleSheet("border:1px solid #dddddd; border-radius:4px; background-color:#ffffff; padding:6px;")
-        self.source_input.setPlaceholderText("e.g., YouTube URL or show name")
+        self.source_input.setPlaceholderText(self.tr("e.g., YouTube URL or show name"))
         self.source_input.setText(self.settings.value("anki_source", ""))
+        try:
+            # Ensure the text field initially shows the left side (e.g., scheme/domain)
+            self.source_input.setCursorPosition(0)
+        except Exception:
+            pass
         self.source_input.textChanged.connect(
             lambda *_: self.settings.setValue("anki_source", self.source_input.text())
         )
-        form.addRow("Source:", self.source_input)
+        form.addRow(self.tr("Source:"), self.source_input)
 
         # Tags field
         self.tags_input = QLineEdit()
         self.tags_input.setStyleSheet("border:1px solid #dddddd; border-radius:4px; background-color:#ffffff; padding:6px;")
-        self.tags_input.setPlaceholderText("comma-separated, e.g., Chinese,news,HSK")
+        self.tags_input.setPlaceholderText(self.tr("comma-separated, e.g., Chinese,news,HSK"))
         self.tags_input.setText(self.settings.value("anki_tags", ""))
         self.tags_input.textChanged.connect(
             lambda *_: self.settings.setValue("anki_tags", self.tags_input.text())
         )
-        form.addRow("Tags:", self.tags_input)
+        form.addRow(self.tr("Tags:"), self.tags_input)
 
         bottom_row.addLayout(form, stretch=3)
         bottom_row.addStretch(1)
 
         # Create button: bigger and right-aligned
-        self.create_card_btn = QPushButton("Create Anki Card")
+        self.create_card_btn = QPushButton(self.tr("Create Anki Card"))
         self.set_create_button_enabled(False)
         self.create_card_btn.setMinimumHeight(96)
         self.create_card_btn.setMinimumWidth(208)
@@ -830,7 +836,9 @@ class PlayerUI(QWidget):
     def toggle_mode(self):
         self.auto_pause_mode = self.mode_btn.isChecked()
         self.mode_btn.setText(
-            "Switch to Continuous" if self.auto_pause_mode else "Switch to Auto‑Pause"
+            self.tr("Switch to Continuous")
+            if self.auto_pause_mode
+            else self.tr("Switch to Auto-Pause")
         )
 
         self.auto_pause_timer.stop()
@@ -929,9 +937,9 @@ class PlayerUI(QWidget):
 
     def _update_forward_button_label(self):
         if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
-            self.forward_btn.setText("Pause")
+            self.forward_btn.setText(self.tr("Pause"))
         else:
-            self.forward_btn.setText("Forward")
+            self.forward_btn.setText(self.tr("Forward"))
         self.update_debug()
 
     def forward_or_pause(self):
@@ -1048,21 +1056,23 @@ class PlayerUI(QWidget):
     def set_extend_button_active_style(self, active: bool):
         if active:
             self.add_next_btn.setStyleSheet(
-                "background-color:#3565B1; color:#ffffff; border:1px solid #dddddd; border-radius:4px; padding:6px 16px;"
+                "background-color:#3565B1; color:#ffffff; border:1px solid #dddddd; border-radius:4px; padding:6px 16px; font-weight:bold;"
             )
         else:
             self.add_next_btn.setStyleSheet(
-                "border:1px solid #dddddd; border-radius:4px; padding:6px 16px; background:#ffffff; color:#000;"
+                "border:1px solid #dddddd; border-radius:4px; padding:6px 16px; background:#ffffff; color:#000; font-weight:bold;"
             )
 
     def refresh_extend_button_ui(self):
         try:
             if getattr(self, 'extend_active', False) and getattr(self, 'extend_count', 0) > 0:
                 self.set_extend_button_active_style(True)
-                self.add_next_btn.setText(f"Extend Selection →→ ({self.extend_count})")
+                self.add_next_btn.setText(
+                    self.tr("Extend Selection →→ ({count})").format(count=self.extend_count)
+                )
             else:
                 self.set_extend_button_active_style(False)
-                self.add_next_btn.setText("Extend Selection →→")
+                self.add_next_btn.setText(self.tr("Extend Selection →→"))
         except Exception:
             pass
 
@@ -1156,7 +1166,7 @@ class PlayerUI(QWidget):
         self.temp_combined_orig = None
         self.temp_combined_trans = None
         self.set_extend_button_active_style(False)
-        self.add_next_btn.setText("Extend Selection →→")
+        self.add_next_btn.setText(self.tr("Extend Selection →→"))
         # Restore editors to current segment only
         self.update_subtitle_display()
         self.show_current_segment_in_adjuster()
@@ -1164,9 +1174,14 @@ class PlayerUI(QWidget):
 
     # === Search Features ===
     def run_search(self):
-        term = self.search_input.text().strip().lower()
+        raw_term = self.search_input.text().strip()
+        term = raw_term.lower()
         if not term:
-            self._message(QMessageBox.Icon.Warning, "Empty Search", "Please enter a search term.")
+            self._message(
+                QMessageBox.Icon.Warning,
+                self.tr("Empty Search"),
+                self.tr("Please enter a search term."),
+            )
             return
         self.search_matches = []
         for i, entry in enumerate(self.orig_entries):
@@ -1179,13 +1194,17 @@ class PlayerUI(QWidget):
             if term in orig_text or term in trans_text:
                 self.search_matches.append(i)
         if not self.search_matches:
-            self._message(QMessageBox.Icon.Information, "No Results", f"No matches for '{term}'.")
-            self.search_btn.setText("Search")
+            self._message(
+                QMessageBox.Icon.Information,
+                self.tr("No Results"),
+                self.tr("No matches for '{term}'.").format(term=raw_term),
+            )
+            self.search_btn.setText(self.tr("Search"))
             self.search_counter.setText("")
             return
         self.search_index = 0
         self.search_total = len(self.search_matches)
-        self.search_btn.setText("Next Match")
+        self.search_btn.setText(self.tr("Next Match"))
         self.jump_to_match()
 
     def on_search_button(self):
@@ -1211,7 +1230,9 @@ class PlayerUI(QWidget):
         try:
             current_pos = self.search_index + 1
             total = getattr(self, 'search_total', len(self.search_matches))
-            self.search_counter.setText(f"{current_pos} of {total}")
+            self.search_counter.setText(
+                self.tr("{current} of {total}").format(current=current_pos, total=total)
+            )
         except Exception:
             pass
         self.search_index = (self.search_index + 1) % len(self.search_matches)
@@ -1226,7 +1247,7 @@ class PlayerUI(QWidget):
         self.search_index = 0
         self.search_total = 0
         if hasattr(self, 'search_btn'):
-            self.search_btn.setText("Search")
+            self.search_btn.setText(self.tr("Search"))
         if hasattr(self, 'search_counter'):
             self.search_counter.setText("")
         self.cancel_extend_selection()
@@ -1249,8 +1270,8 @@ class PlayerUI(QWidget):
                 if not anki.is_available():
                     self._message(
                         QMessageBox.Icon.Warning,
-                        "Anki Not Running",
-                        "Anki with the Anki-Connect add-on must be running.",
+                        self.tr("Anki Not Running"),
+                        self.tr("Anki with the Anki-Connect add-on must be running."),
                     )
                     return
             else:
@@ -1259,8 +1280,8 @@ class PlayerUI(QWidget):
         except Exception:
             self._message(
                 QMessageBox.Icon.Warning,
-                "Anki Not Running",
-                "Anki with the Anki-Connect add-on must be running.",
+                self.tr("Anki Not Running"),
+                self.tr("Anki with the Anki-Connect add-on must be running."),
             )
             return
 
@@ -1268,8 +1289,10 @@ class PlayerUI(QWidget):
         if self.card_created_for_current_segment:
             self._message(
                 QMessageBox.Icon.Information,
-                "Already Created",
-                "An Anki card has already been created for this segment. Play to a new segment to enable the button.",
+                self.tr("Already Created"),
+                self.tr(
+                    "An Anki card has already been created for this segment. Play to a new segment to enable the button."
+                ),
             )
             return
 
@@ -1329,9 +1352,16 @@ class PlayerUI(QWidget):
                 md_current = self.trans_editor.toMarkdown().strip()
             else:
                 md_current = self.trans_editor.toPlainText().strip()
-            back_html = format_markdown(md_current) if md_current else "(no translation)"
+            back_html = (
+                format_markdown(md_current) if md_current else self.tr("(no translation)")
+            )
             if source_text:
-                back_html = back_html + f"<div style=\"margin-top:8px;color:#666;\"><em>Source: {source_text}</em></div>"
+                back_html = (
+                    back_html
+                    + self.tr(
+                        "<div style=\"margin-top:8px;color:#666;\"><em>Source: {source}</em></div>"
+                    ).format(source=source_text)
+                )
 
             anki.add_note(
                 self.orig_input.text().strip() or current_entry.text,
@@ -1341,24 +1371,50 @@ class PlayerUI(QWidget):
                 tags=raw_tags,
             )
 
+            # Determine if we should advance beyond the extended selection once the
+            # card is created. Only applies when the extend button was used.
+            advance_to_index = None
+            if (
+                getattr(self, "extend_active", False)
+                and self.extend_end_index is not None
+            ):
+                candidate = self.extend_end_index + 1
+                if candidate < len(self.orig_entries):
+                    advance_to_index = candidate
+
             # Success UI + state
             # Friendly message shows combined segment indices when extended
             if getattr(self, "extend_active", False) and self.extend_end_index is not None:
                 base_idx = self.extend_base_index if self.extend_base_index is not None else self.current_index
                 end_idx = self.extend_end_index
                 segs = "+".join(str(i + 1) for i in range(base_idx, end_idx + 1))
-                msg = f"Anki card created for segments {segs} in deck '{deck_name}'."
+                msg = self.tr("Anki card created for segments {segments} in deck '{deck}'.").format(
+                    segments=segs, deck=deck_name
+                )
             else:
-                msg = f"Anki card created for segment {self.current_index + 1} in deck '{deck_name}'."
-            self._message(QMessageBox.Icon.Information, "Card Created", msg)
+                msg = self.tr("Anki card created for segment {segment} in deck '{deck}'.").format(
+                    segment=self.current_index + 1, deck=deck_name
+                )
+            self._message(QMessageBox.Icon.Information, self.tr("Card Created"), msg)
             self.card_created_for_current_segment = True
             self.set_create_button_enabled(False)
             # Exit extended mode after successful creation
             self.cancel_extend_selection()
 
+            if advance_to_index is not None:
+                self.current_index = advance_to_index
+                self.jump_to_current_subtitle_and_play()
+            else:
+                # cancel_extend_selection() refreshes the UI and re-enables the button;
+                # restore the "already created" guard when we stay on the same segment.
+                self.card_created_for_current_segment = True
+                self.set_create_button_enabled(False)
+
         except Exception as e:
             self._message(
                 QMessageBox.Icon.Critical,
-                "Anki Error",
-                f"Failed to create Anki card: {e}. Ensure Anki and the Anki‑Connect add‑on are running.",
+                self.tr("Anki Error"),
+                self.tr("Failed to create Anki card: {error}. Ensure Anki and the Anki-Connect add-on are running.").format(
+                    error=e
+                ),
             )

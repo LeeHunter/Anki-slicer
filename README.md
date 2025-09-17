@@ -105,6 +105,32 @@ Contributions are welcome!
 Ideas, bug reports, feature requests → open an Issue.
 Pull requests are encouraged — new features (UI tweaks, extra export formats, etc.) are fair game.
 
+### Localization
+
+Anki-Slicer is being prepared for translation. UI strings now go through Qt's
+translation system (`anki_slicer/i18n.py`). To work on translations:
+
+- Wrap new UI text with Qt's translation helpers, e.g. `self.tr("Create Anki Card")`
+  inside widgets (or `QCoreApplication.translate("Context", "Text")` outside of
+  QObject classes).
+- Run `pylupdate6 anki_slicer/*.py -ts anki_slicer/locale/anki_slicer_fr.ts` (swap the
+  locale code) to refresh or create translation catalogs, then `lrelease` to compile
+  the corresponding `.qm` bundles when you're ready to ship.
+- Edit the `.ts` file with Qt Linguist or another editor and commit both the
+  updated `.ts` and compiled `.qm` outputs.
+
+Set the environment variable `ANKI_SLICER_LOCALE` (for example `fr` or `es_ES`)
+before launching to force a specific translation during development. Without a
+matching `.qm` file the app falls back to English.
+
+### Accessibility
+
+Keep accessibility in mind while developing features. Refer to
+[`docs/accessibility_checklist.md`](docs/accessibility_checklist.md) for the
+current list of items to verify (screen reader support, keyboard navigation,
+contrast, etc.). Update the checklist as new workflows—such as the planned
+YouTube integration—introduce additional requirements.
+
 ## ⚖️ License
 
 This project is licensed under the MIT License — see LICENSE for details.

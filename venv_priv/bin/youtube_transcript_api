@@ -1,6 +1,6 @@
 #!/Users/leehunter/Anki-slicer/venv_priv/bin/python3.12
 import sys
-from anki_slicer.main import main
+from youtube_transcript_api.__main__ import main
 if __name__ == '__main__':
     if sys.argv[0].endswith('.exe'):
         sys.argv[0] = sys.argv[0][:-4]

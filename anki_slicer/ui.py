@@ -365,7 +365,13 @@ class FileSelectorUI(QWidget):
             )
             box.exec()
 
-        self.player = PlayerUI(self.audio_path, orig_entries, trans_entries)
+        allow_streaming = True  # Future: allow switching between local/YouTube modes
+        self.player = PlayerUI(
+            self.audio_path,
+            orig_entries,
+            trans_entries,
+            allow_streaming=allow_streaming,
+        )
         self.player.show()
         try:
             # Notify listeners (e.g., an existing Player) to close

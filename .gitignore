@@ -221,3 +221,9 @@ anki_clips/
 
 # Local conversation logs for Codex sessions
 conversation_logs/
+
+# Local configuration containing API keys
+.anki_slicer_config.json
+
+# Business planning notes
+business_plan.md

@@ -11,15 +11,28 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
     QFormLayout,
     QFrame,
+    QComboBox,
+    QListView,
 )
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PyQt6.QtCore import QUrl, QTimer, Qt, QSettings, QEvent
-from PyQt6.QtGui import QKeySequence, QAction, QFont
+from PyQt6.QtGui import QKeySequence, QAction, QFont, QTextCursor
 import logging
 import re
+import unicodedata
+from typing import List
+from urllib.parse import urlparse, parse_qs
+from time import monotonic
 from anki_slicer.subs import SubtitleEntry
 from anki_slicer.segment_adjuster import SegmentAdjusterWidget
 from anki_slicer.ankiconnect import AnkiConnect
+from anki_slicer.youtube.embed_view import YouTubeEmbedView
+from anki_slicer.youtube.captions import (
+    fetch_caption_entries,
+    list_transcript_options,
+    TranscriptOption,
+)
+from anki_slicer.youtube.audio import download_audio_as_wav
 import tempfile
 import os
 import markdown
@@ -40,6 +53,8 @@ class PlayerUI(QWidget):
         mp3_path: str,
         orig_entries: list[SubtitleEntry],
         trans_entries: list[SubtitleEntry],
+        *,
+        allow_streaming: bool = False,
     ):
         super().__init__()
         self.setWindowTitle(self.tr("Anki-slicer Player"))
@@ -79,6 +94,25 @@ class PlayerUI(QWidget):
         self.search_index = 0
 
         # Player setup
+        self.streaming_enabled = allow_streaming
+        self._current_video_id: str | None = None
+        self._temp_audio_files: list[str] = []
+        self._video_duration_ms = 0
+        self._last_video_time = 0.0
+        self._video_syncing = False
+        self._video_sync_target = 0.0
+        self._video_playing = False
+        self._caption_options: dict[str, TranscriptOption] = {}
+        self._pending_video_seek: float | None = None
+        self._pending_video_play: bool | None = None
+        self._last_video_report_ts: float | None = None
+        self._last_video_sync_command_at: float | None = None
+        self._search_match_sources: dict[int, set[str]] = {}
+        self._search_term_raw: str = ""
+        self._search_term_norm: str = ""
+        self._translator_instance = None
+        self._translator_unavailable = False
+
         self.player = QMediaPlayer()
         self.audio_output = QAudioOutput()
         self.audio_output.setVolume(1.0)
@@ -86,14 +120,15 @@ class PlayerUI(QWidget):
         # Update play/pause UI when state changes
         self.player.playbackStateChanged.connect(self._on_playback_state_changed)
 
-        # Convert to wav for stable playback
-        from pydub import AudioSegment
+        self._tmp_wav = None
+        if mp3_path:
+            from pydub import AudioSegment
 
-        self._tmp_wav = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-        audio = AudioSegment.from_file(mp3_path)
-        audio = audio.set_frame_rate(44100).set_channels(2)
-        audio.export(self._tmp_wav.name, format="wav")
-        self.player.setSource(QUrl.fromLocalFile(self._tmp_wav.name))
+            self._tmp_wav = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+            audio = AudioSegment.from_file(mp3_path)
+            audio = audio.set_frame_rate(44100).set_channels(2)
+            audio.export(self._tmp_wav.name, format="wav")
+            self.player.setSource(QUrl.fromLocalFile(self._tmp_wav.name))
 
         # Timers
         self.timer = QTimer()
@@ -136,9 +171,232 @@ class PlayerUI(QWidget):
         # Waveform click-to-preview
         self.adjuster.installEventFilter(self)
 
+    def closeEvent(self, event):  # type: ignore[override]
+        for path in self._temp_audio_files:
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+        super().closeEvent(event)
+
     def save_anki_deck_name(self, *_):
         # Accepts the signal's str arg (or none) without complaining
         self.settings.setValue("anki_deck_name", self.anki_deck_input.text().strip())
+
+    def _handle_load_video(self, *, initial: bool = False) -> None:
+        if not self.streaming_enabled:
+            QMessageBox.information(
+                self,
+                self.tr("Streaming Disabled"),
+                self.tr("This build does not support streaming video."),
+            )
+            return
+
+        url = (self.source_input.text() or "").strip()
+        if not url:
+            if not initial:
+                QMessageBox.information(
+                    self,
+                    self.tr("Missing URL"),
+                    self.tr("Paste a YouTube link before loading."),
+                )
+            return
+
+        video_id = self._extract_video_id(url)
+        if not video_id:
+            if not initial:
+                QMessageBox.warning(
+                    self,
+                    self.tr("Invalid URL"),
+                    self.tr("Could not extract a YouTube video ID from that link."),
+                )
+            return
+
+        self._current_video_id = video_id
+        self.youtube_view.load_video(video_id, autoplay=False)
+
+        options = list_transcript_options(video_id)
+        self._populate_caption_combos(options)
+
+        if self._tmp_wav is None:
+            wav_path = download_audio_as_wav(video_id)
+            if wav_path:
+                self._temp_audio_files.append(wav_path)
+                try:
+                    self.adjuster.load_waveform(wav_path)
+                    self.player.setSource(QUrl.fromLocalFile(wav_path))
+                    self.player.setPosition(0)
+                    self.pos_slider.setEnabled(True)
+                    self.time_label.setText(self.tr("00:00 / 00:00"))
+                    self._tmp_wav = object()
+                except Exception as exc:
+                    logger.warning("Failed to load waveform for %s: %s", video_id, exc)
+                    self.pos_slider.setEnabled(False)
+                    self.time_label.setText(self.tr("Streaming (audio unavailable)"))
+            else:
+                self.pos_slider.setEnabled(False)
+                self.time_label.setText(self.tr("Streaming (audio unavailable)"))
+
+    @staticmethod
+    def _extract_video_id(value: str) -> str | None:
+        value = value.strip()
+        if not value:
+            return None
+        # Raw video ID
+        if re.fullmatch(r"[A-Za-z0-9_-]{11}", value):
+            return value
+
+        parsed = urlparse(value)
+        if not parsed.scheme:
+            # Try again assuming missing scheme
+            parsed = urlparse("https://" + value)
+
+        host = parsed.netloc.lower()
+        path = parsed.path or ""
+
+        if host.endswith("youtu.be"):
+            vid = path.lstrip("/")
+            return vid[:11] if len(vid) >= 11 else None
+
+        if "youtube" in host:
+            query = parse_qs(parsed.query)
+            if "v" in query and query["v"]:
+                return query["v"][0][:11]
+            segments = [seg for seg in path.split("/") if seg]
+            if segments:
+                if segments[0] in {"embed", "shorts", "v"} and len(segments) > 1:
+                    return segments[1][:11]
+
+        return None
+
+    def _populate_caption_combos(self, options: List[TranscriptOption]) -> None:
+        self._caption_options = {opt.key: opt for opt in options}
+
+        if not options:
+            for combo in (self.orig_caption_combo, self.trans_caption_combo):
+                combo.blockSignals(True)
+                combo.clear()
+                combo.addItem(self.tr("None"), "")
+                combo.blockSignals(False)
+            self.orig_entries = []
+            self.trans_entries = []
+            self.current_index = 0
+            self.update_subtitle_display()
+            self.show_current_segment_in_adjuster()
+            return
+
+        orig_saved = self.settings.value("yt_orig_caption", "")
+        trans_saved = self.settings.value("yt_trans_caption", "")
+
+        self._fill_caption_combo(self.orig_caption_combo, orig_saved, options, "orig")
+        self._fill_caption_combo(self.trans_caption_combo, trans_saved, options, "trans")
+
+        self._apply_caption_selection("orig")
+        self._apply_caption_selection("trans")
+
+    def _fill_caption_combo(
+        self,
+        combo: QComboBox,
+        saved_key: str,
+        options: List[TranscriptOption],
+        kind: str,
+    ) -> str:
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem(self.tr("None"), "")
+        filtered_keys: list[str] = []
+        for opt in options:
+            if kind == "orig" and opt.translation_code is not None:
+                continue
+            if kind == "trans" and opt.translation_code is None:
+                continue
+            combo.addItem(opt.label, opt.key)
+            filtered_keys.append(opt.key)
+
+        target = ""
+        if saved_key and saved_key in filtered_keys:
+            target = saved_key
+        else:
+            default_key = self._default_caption_key(kind, options)
+            if default_key in filtered_keys:
+                target = default_key
+
+        combo.setCurrentIndex(combo.findData(target) if target else 0)
+        combo.blockSignals(False)
+        return target
+
+    def _default_caption_key(self, kind: str, options: List[TranscriptOption]) -> str:
+        if kind == "orig":
+            for opt in options:
+                if opt.translation_code is None and not opt.is_generated:
+                    return opt.key
+            for opt in options:
+                if opt.translation_code is None:
+                    return opt.key
+        else:
+            preferred = ("en", "en-US")
+            for pref in preferred:
+                for opt in options:
+                    if opt.translation_code == pref:
+                        return opt.key
+            for opt in options:
+                if opt.translation_code is not None:
+                    return opt.key
+        return ""
+
+    def _apply_caption_selection(self, kind: str) -> None:
+        combo = self.orig_caption_combo if kind == "orig" else self.trans_caption_combo
+        key = combo.currentData()
+
+        if kind == "orig":
+            self.settings.setValue("yt_orig_caption", key or "")
+            if not key:
+                self.orig_entries = []
+                self.current_index = 0
+                self.update_subtitle_display()
+                self.show_current_segment_in_adjuster()
+                return
+        else:
+            self.settings.setValue("yt_trans_caption", key or "")
+            if not key:
+                self.trans_entries = []
+                self.update_subtitle_display()
+                return
+
+        option = self._caption_options.get(key)
+        if not option:
+            return
+
+        entries = fetch_caption_entries(option)
+        if kind == "orig":
+            self.orig_entries = entries
+            self.current_index = 0
+            self.update_subtitle_display()
+            self.show_current_segment_in_adjuster()
+        else:
+            if self.orig_entries and entries:
+                self.trans_entries = self._align_translation_entries(
+                    self.orig_entries, entries
+                )
+            else:
+                self.trans_entries = entries
+            self.update_subtitle_display()
+
+    def _init_caption_combo(self, combo: QComboBox) -> None:
+        combo.setMinimumContentsLength(36)
+        combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        combo.setMinimumWidth(260)
+
+        view = QListView(combo)
+        view.setUniformItemSizes(True)
+        view.setWordWrap(False)
+        view.setSpacing(2)
+        view.setMinimumWidth(360)
+        view.setMinimumHeight(280)
+        view.setAlternatingRowColors(True)
+        combo.setView(view)
 
     def setup_ui(self):
         layout = QVBoxLayout()
@@ -157,9 +415,10 @@ class PlayerUI(QWidget):
         layout.addLayout(top_bar)
 
         # === Text panel (Search + Original/Translation) ===
-        text_panel = QFrame()
-        text_panel.setStyleSheet("background-color:#ffffff; border:none; border-radius:6px;")
-        text_layout = QVBoxLayout(text_panel)
+        self.text_panel = QFrame()
+        self.text_panel.setObjectName("text_panel")
+        self.text_panel.setStyleSheet("background-color:#ffffff; border:none; border-radius:6px;")
+        text_layout = QVBoxLayout(self.text_panel)
         text_layout.setContentsMargins(16, 16, 16, 16)
         text_layout.setSpacing(10)
 
@@ -236,6 +495,11 @@ class PlayerUI(QWidget):
         except Exception:
             pass
         self.orig_input.textChanged.connect(self.on_original_changed)
+        self.orig_input.textChanged.connect(self._update_translate_button_state)
+        try:
+            self.orig_input.selectionChanged.connect(self._update_selected_word)
+        except Exception:
+            pass
 
         # Translation: editable Markdown with fixed height + scrollbar
         self.trans_editor = QTextEdit()
@@ -284,17 +548,99 @@ class PlayerUI(QWidget):
         self.orig_input.setMinimumHeight(int(fm_o.lineSpacing() + 12))
         self.trans_editor.setFixedHeight(int(fm_t.lineSpacing() * 6 + 20))
 
-        text_layout.addWidget(self.orig_input)
-        text_layout.addWidget(trans_title)
-        text_layout.addWidget(self.trans_editor)
+        text_fields_container = QWidget()
+        text_fields_layout = QVBoxLayout(text_fields_container)
+        text_fields_layout.setContentsMargins(0, 0, 0, 0)
+        text_fields_layout.setSpacing(8)
+        text_fields_container.setMinimumWidth(320)
+        text_fields_container.setMaximumWidth(560)
+
+        text_fields_layout.addWidget(self.orig_input)
+        text_fields_layout.addWidget(trans_title)
+        text_fields_layout.addWidget(self.trans_editor)
+
+        text_content_row = QHBoxLayout()
+        text_content_row.setSpacing(12)
+        text_content_row.addWidget(text_fields_container, stretch=3)
+
+        self.text_future_panel = QFrame()
+        self.text_future_panel.setObjectName("text_future_panel")
+        self.text_future_panel.setMinimumWidth(240)
+        self.text_future_panel.setStyleSheet(
+            "QFrame#text_future_panel {"
+            "border: 1px dashed #cccccc; border-radius: 6px; background-color: #fafafa;"
+            "}"
+        )
+
+        future_layout = QVBoxLayout(self.text_future_panel)
+        future_layout.setContentsMargins(12, 12, 12, 12)
+        future_layout.setSpacing(8)
+
+        translate_header = QLabel(self.tr("Quick Translate"))
+        translate_header.setStyleSheet("font-weight:bold; color:#555555; font-size:14px;")
+        future_layout.addWidget(translate_header)
+
+        translation_hint = QLabel(
+            self.tr("Use this tool when translations are missing. \nSelect a word in the Original field to focus it.")
+        )
+        translation_hint.setWordWrap(True)
+        translation_hint.setStyleSheet("color:#888888; font-size:12px;")
+        future_layout.addWidget(translation_hint)
+
+        word_label = QLabel(self.tr("Selected word"))
+        word_label.setStyleSheet("font-weight:bold; font-size:12px;")
+        future_layout.addWidget(word_label)
+
+        self.vocab_word_display = QLineEdit()
+        self.vocab_word_display.setReadOnly(True)
+        self.vocab_word_display.setPlaceholderText(self.tr("Select a word in the sentence…"))
+        self.vocab_word_display.setStyleSheet(
+            "border: 1px solid #dddddd; border-radius: 4px; padding:4px; background-color:#fefefe;"
+        )
+        future_layout.addWidget(self.vocab_word_display)
+
+        translate_row = QHBoxLayout()
+        self.translate_button = QPushButton(self.tr("Translate"))
+        self.translate_button.setEnabled(False)
+        self.translate_button.setStyleSheet(
+            "QPushButton{padding:6px 12px; border-radius:4px; border:1px solid #d0d0d0; background:#ffffff;}"
+            "QPushButton:disabled{color:#aaaaaa; border-color:#e0e0e0;}"
+        )
+        self.translate_button.clicked.connect(self._handle_translate_request)
+        translate_row.addWidget(self.translate_button)
+        translate_row.addStretch(1)
+        future_layout.addLayout(translate_row)
+
+        vocab_label = QLabel(self.tr("Anki Vocabulary"))
+        vocab_label.setStyleSheet("font-weight:bold; font-size:12px;")
+        future_layout.addWidget(vocab_label)
+
+        self.vocab_output_edit = QTextEdit()
+        self.vocab_output_edit.setAcceptRichText(False)
+        self.vocab_output_edit.setPlaceholderText(self.tr("Word meaning, usage notes, etc."))
+        self.vocab_output_edit.setFixedHeight(90)
+        self.vocab_output_edit.setStyleSheet(
+            "border:1px solid #dddddd; border-radius:4px; padding:6px; background-color:#ffffff;"
+        )
+        self.vocab_output_edit.textChanged.connect(self._mark_vocab_modified)
+        future_layout.addWidget(self.vocab_output_edit)
+
+        future_layout.addStretch(1)
+
+        text_content_row.addWidget(self.text_future_panel, stretch=2)
+        text_layout.addLayout(text_content_row)
 
         # Add text panel to main layout
-        layout.addWidget(text_panel)
+        layout.addWidget(self.text_panel)
 
-        # === Audio panel (Slider, controls, waveform, segment controls) ===
-        audio_panel = QFrame()
-        audio_panel.setStyleSheet("background-color:#ffffff; border:none; border-radius:6px;")
-        audio_layout = QVBoxLayout(audio_panel)
+        # === Audio + Video panel ===
+        media_row = QHBoxLayout()
+        media_row.setSpacing(12)
+
+        self.sound_panel = QFrame()
+        self.sound_panel.setObjectName("sound_panel")
+        self.sound_panel.setStyleSheet("background-color:#ffffff; border:none; border-radius:6px;")
+        audio_layout = QVBoxLayout(self.sound_panel)
         audio_layout.setContentsMargins(16, 16, 16, 16)
         audio_layout.setSpacing(10)
 
@@ -305,7 +651,6 @@ class PlayerUI(QWidget):
         self.pos_slider.sliderMoved.connect(self.seek)
         self.pos_slider.sliderPressed.connect(self.on_slider_pressed)
         self.pos_slider.sliderReleased.connect(self.on_slider_released)
-        # Style the slider for better visibility and a grey handle
         self.pos_slider.setStyleSheet(
             "QSlider::groove:horizontal{height:6px;background:#e6e6e6;border-radius:3px;}"
             "QSlider::handle:horizontal{background:#cccccc;border:1px solid #b3b3b3;width:16px;height:16px;margin:-5px 0;border-radius:8px;}"
@@ -317,7 +662,11 @@ class PlayerUI(QWidget):
         slider_row.addWidget(self.time_label)
         audio_layout.addLayout(slider_row)
 
-        # === Waveform widget ===
+        if self._tmp_wav is None:
+            self.pos_slider.setEnabled(False)
+            self.time_label.setText(self.tr("No audio loaded"))
+
+        # Waveform widget
         self.adjuster = SegmentAdjusterWidget(self.mp3_path, self.player)
         self.adjuster.setFixedHeight(160)
         audio_layout.addWidget(self.adjuster)
@@ -391,8 +740,79 @@ class PlayerUI(QWidget):
             self.add_next_btn.setText(self.tr("Extend Selection →→"))
         except Exception:
             pass
-        # Add audio panel to main layout
-        layout.addWidget(audio_panel)
+        media_row.addWidget(self.sound_panel, stretch=2)
+
+        # === Video panel ===
+        self.youtube_panel = QFrame()
+        self.youtube_panel.setObjectName("youtube_panel")
+        self.youtube_panel.setStyleSheet("background-color:#ffffff; border:none; border-radius:6px;")
+        video_layout = QVBoxLayout(self.youtube_panel)
+        video_layout.setContentsMargins(16, 16, 16, 16)
+        video_layout.setSpacing(10)
+
+        url_row = QHBoxLayout()
+        url_row.setSpacing(8)
+        url_label = QLabel(self.tr("YouTube URL:"))
+        url_label.setStyleSheet("font-weight:bold;")
+        url_row.addWidget(url_label)
+
+        self.source_input = QLineEdit()
+        self.source_input.setStyleSheet(
+            "border:1px solid #dddddd; border-radius:4px; background-color:#ffffff; padding:6px;"
+        )
+        self.source_input.setPlaceholderText(self.tr("Paste YouTube link…"))
+        self.source_input.setText(self.settings.value("anki_source", ""))
+        try:
+            self.source_input.setCursorPosition(0)
+        except Exception:
+            pass
+        self.source_input.textChanged.connect(
+            lambda *_: self.settings.setValue("anki_source", self.source_input.text())
+        )
+        self.source_input.returnPressed.connect(self._handle_load_video)
+        url_row.addWidget(self.source_input, stretch=1)
+
+        self.load_video_btn = QPushButton(self.tr("Load"))
+        self.load_video_btn.setEnabled(self.streaming_enabled)
+        self.load_video_btn.clicked.connect(self._handle_load_video)
+        url_row.addWidget(self.load_video_btn)
+
+        video_layout.addLayout(url_row)
+
+        self.youtube_view = YouTubeEmbedView()
+        self.youtube_view.setMinimumSize(360, 200)
+        self.youtube_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        video_layout.addWidget(self.youtube_view, stretch=1)
+
+        self.youtube_view.bridge.ready.connect(self._on_video_ready)
+        self.youtube_view.bridge.durationChanged.connect(self._on_video_duration)
+        self.youtube_view.bridge.timeChanged.connect(self._on_video_time)
+        self.youtube_view.bridge.stateChanged.connect(self._on_video_state)
+
+        captions_form = QFormLayout()
+        captions_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+        self.orig_caption_combo = QComboBox()
+        self._init_caption_combo(self.orig_caption_combo)
+        self.orig_caption_combo.addItem(self.tr("None"), "")
+        self.orig_caption_combo.currentIndexChanged.connect(
+            lambda _: self._apply_caption_selection("orig")
+        )
+        captions_form.addRow(self.tr("Original captions:"), self.orig_caption_combo)
+
+        self.trans_caption_combo = QComboBox()
+        self._init_caption_combo(self.trans_caption_combo)
+        self.trans_caption_combo.addItem(self.tr("None"), "")
+        self.trans_caption_combo.currentIndexChanged.connect(
+            lambda _: self._apply_caption_selection("trans")
+        )
+        captions_form.addRow(self.tr("Translation captions:"), self.trans_caption_combo)
+
+        video_layout.addLayout(captions_form)
+
+        media_row.addWidget(self.youtube_panel, stretch=1)
+
+        layout.addLayout(media_row)
 
         # Optional on-screen debug label (enabled via ANKI_SLICER_DEBUG)
         self.debug_enabled = bool(os.getenv("ANKI_SLICER_DEBUG"))
@@ -414,9 +834,10 @@ class PlayerUI(QWidget):
         self.end_plus.clicked.connect(lambda: self.nudge_segment("end", +0.05))
 
         # === Anki panel ===
-        anki_panel = QFrame()
-        anki_panel.setStyleSheet("background-color:#ffffff; border:none; border-radius:6px;")
-        bottom_row = QHBoxLayout(anki_panel)
+        self.anki_panel = QFrame()
+        self.anki_panel.setObjectName("anki_panel")
+        self.anki_panel.setStyleSheet("background-color:#ffffff; border:none; border-radius:6px;")
+        bottom_row = QHBoxLayout(self.anki_panel)
         bottom_row.setContentsMargins(16, 16, 16, 16)
         bottom_row.setSpacing(10)
 
@@ -435,21 +856,6 @@ class PlayerUI(QWidget):
         )
         self.anki_deck_input.textChanged.connect(self.save_anki_deck_name)
         form.addRow(self.tr("Anki Deck:"), self.anki_deck_input)
-
-        # Source field
-        self.source_input = QLineEdit()
-        self.source_input.setStyleSheet("border:1px solid #dddddd; border-radius:4px; background-color:#ffffff; padding:6px;")
-        self.source_input.setPlaceholderText(self.tr("e.g., YouTube URL or show name"))
-        self.source_input.setText(self.settings.value("anki_source", ""))
-        try:
-            # Ensure the text field initially shows the left side (e.g., scheme/domain)
-            self.source_input.setCursorPosition(0)
-        except Exception:
-            pass
-        self.source_input.textChanged.connect(
-            lambda *_: self.settings.setValue("anki_source", self.source_input.text())
-        )
-        form.addRow(self.tr("Source:"), self.source_input)
 
         # Tags field
         self.tags_input = QLineEdit()
@@ -477,7 +883,7 @@ class PlayerUI(QWidget):
             stretch=0,
             alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
         )
-        layout.addWidget(anki_panel)
+        layout.addWidget(self.anki_panel)
 
         self.create_card_btn.clicked.connect(self.create_anki_card)
 
@@ -493,6 +899,7 @@ class PlayerUI(QWidget):
         self.extend_sel_end = None
         self.temp_combined_orig = None
         self.temp_combined_trans = None
+        self._update_translate_button_state()
 
     def on_original_changed(self):
         if getattr(self, "_updating_ui", False):
@@ -678,6 +1085,12 @@ class PlayerUI(QWidget):
             self.update_subtitle_display()
 
     def show_current_segment_in_adjuster(self):
+        if not self.orig_entries or self.current_index >= len(self.orig_entries):
+            self.adjuster.set_bounds_and_selection(0.0, 0.0, 0.0, 0.0)
+            self.set_create_button_enabled(False)
+            self.update_debug()
+            return
+
         entry = self.orig_entries[self.current_index]
         total_sec = max(0.0, (self.total_duration or 0) / 1000.0)
         margin = float(self.MARGIN_SEC)
@@ -706,6 +1119,17 @@ class PlayerUI(QWidget):
         self.update_debug()
 
     def update_subtitle_display(self):
+        if not self.orig_entries:
+            try:
+                self._updating_ui = True
+                self.orig_input.clear()
+                self.trans_editor.clear()
+            finally:
+                self._updating_ui = False
+            self.set_create_button_enabled(False)
+            self.update_debug()
+            return
+
         orig_entry = self.orig_entries[self.current_index]
         trans_entry = (
             self.trans_entries[self.current_index]
@@ -760,6 +1184,12 @@ class PlayerUI(QWidget):
         self.set_create_button_enabled(True)
         self.update_extend_button_enabled()
         self.update_debug()
+        self._update_selected_word()
+        self._update_translate_button_state()
+        try:
+            self.vocab_output_edit.clear()
+        except Exception:
+            pass
 
     # ----- Message helpers (use app icon on dialogs) -----
     def _app_qicon(self) -> QIcon:
@@ -870,6 +1300,8 @@ class PlayerUI(QWidget):
         self.jump_to_current_subtitle_and_play()
 
     def back_to_previous(self):
+        if not self.orig_entries:
+            return
         if self.current_index > 0:
             self.cancel_extend_selection()
             self.save_current_edits()
@@ -877,11 +1309,18 @@ class PlayerUI(QWidget):
         self.jump_to_current_subtitle_and_play()
 
     def jump_to_current_subtitle_and_play(self):
+        if not self.orig_entries:
+            return
+        if self.current_index >= len(self.orig_entries):
+            self.current_index = max(0, len(self.orig_entries) - 1)
         entry = self.orig_entries[self.current_index]
         self.player.setPosition(int(entry.start_time * 1000))
         self.update_subtitle_display()
         self.waiting_for_resume = False
         self.player.play()
+        if self._current_video_id and self.youtube_view.is_ready:
+            self.youtube_view.seek_to(entry.start_time, force=True)
+            self.youtube_view.set_playing(True)
         self.card_created_for_current_segment = False
         self.set_create_button_enabled(True)
 
@@ -898,11 +1337,12 @@ class PlayerUI(QWidget):
         self.slider_active = False
         pos = self.pos_slider.value()
         self.player.setPosition(pos)
-        new_index = self.find_subtitle_index(pos / 1000.0)
-        if new_index != self.current_index:
-            self.cancel_extend_selection()
-            self.save_current_edits()
-            self.current_index = new_index
+        if self.orig_entries:
+            new_index = self.find_subtitle_index(pos / 1000.0)
+            if new_index != self.current_index:
+                self.cancel_extend_selection()
+                self.save_current_edits()
+                self.current_index = new_index
         self.update_subtitle_display()
         self.waiting_for_resume = False
         self.show_current_segment_in_adjuster()
@@ -925,6 +1365,8 @@ class PlayerUI(QWidget):
         self.time_label.setText(
             f"{self.format_time(pos)} / {self.format_time(self.total_duration)}"
         )
+        if self._current_video_id and self._tmp_wav is not None:
+            self._sync_video_to_audio(pos / 1000.0)
 
     def update_duration(self, dur):
         self.total_duration = dur
@@ -934,6 +1376,14 @@ class PlayerUI(QWidget):
 
     def _on_playback_state_changed(self, state):
         self._update_forward_button_label()
+        if self._current_video_id:
+            playing = state == QMediaPlayer.PlaybackState.PlayingState
+            if self.youtube_view.is_ready:
+                self.youtube_view.set_playing(playing)
+            else:
+                self._pending_video_play = playing
+            if playing and self._tmp_wav is not None:
+                self._sync_video_to_audio(self.player.position() / 1000.0, force=True)
 
     def _update_forward_button_label(self):
         if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
@@ -969,6 +1419,8 @@ class PlayerUI(QWidget):
 
     def seek(self, pos):
         self.player.setPosition(pos)
+        if self._current_video_id and self._tmp_wav is not None:
+            self._sync_video_to_audio(pos / 1000.0, force=True)
         self.update_debug()
 
     @staticmethod
@@ -983,6 +1435,80 @@ class PlayerUI(QWidget):
         if hasattr(self.trans_editor, 'toMarkdown'):
             return self.trans_editor.toMarkdown()
         return self.trans_editor.toPlainText()
+
+    def _sync_video_to_audio(self, seconds: float, force: bool = False) -> None:
+        if not self._current_video_id:
+            return
+
+        self._video_sync_target = seconds
+
+        if not self.youtube_view.is_ready:
+            self._pending_video_seek = seconds
+            return
+
+        now = monotonic()
+
+        if not force and self._last_video_time is not None:
+            predicted = self._last_video_time
+            if self._video_playing and self._last_video_report_ts is not None:
+                predicted += max(0.0, now - self._last_video_report_ts)
+            if abs(seconds - predicted) < 0.35:
+                return
+            if self._last_video_sync_command_at is not None:
+                if now - self._last_video_sync_command_at < 0.6:
+                    return
+
+        self._video_syncing = True
+        self._pending_video_seek = None
+        self._last_video_sync_command_at = now
+        self.youtube_view.seek_to(seconds, force=True)
+
+    def _on_video_ready(self) -> None:
+        self._flush_pending_video_commands()
+
+    def _on_video_duration(self, seconds: float) -> None:
+        self._video_duration_ms = int(seconds * 1000)
+        if self._tmp_wav is None and self._video_duration_ms:
+            if not self.pos_slider.isSliderDown():
+                self.pos_slider.setRange(0, self._video_duration_ms)
+                self.time_label.setText(
+                    f"{self.format_time(0)} / {self.format_time(self._video_duration_ms)}"
+                )
+
+    def _on_video_time(self, seconds: float) -> None:
+        self._last_video_time = seconds
+        self._last_video_report_ts = monotonic()
+        if self._video_syncing and abs(seconds - self._video_sync_target) < 0.3:
+            self._video_syncing = False
+        if self._tmp_wav is None and self._video_duration_ms:
+            ms = int(seconds * 1000)
+            if not self.pos_slider.isSliderDown():
+                self.pos_slider.setRange(0, self._video_duration_ms)
+                self.pos_slider.setValue(ms)
+            self.time_label.setText(
+                f"{self.format_time(ms)} / {self.format_time(self._video_duration_ms)}"
+            )
+
+    def _flush_pending_video_commands(self) -> None:
+        if not self.youtube_view.is_ready:
+            return
+        if self._pending_video_seek is not None:
+            target = self._pending_video_seek
+            self._pending_video_seek = None
+            self._last_video_sync_command_at = monotonic()
+            self.youtube_view.seek_to(target, force=True)
+        if self._pending_video_play is not None:
+            play_state = self._pending_video_play
+            self._pending_video_play = None
+            self.youtube_view.set_playing(play_state)
+
+    def _on_video_state(self, state: int) -> None:
+        self._video_playing = state == 1
+        if self._tmp_wav is None:
+            if state == 1:
+                self.forward_btn.setText(self.tr("Pause"))
+            elif state in (0, 2):
+                self.forward_btn.setText(self.tr("Forward"))
 
     def update_extend_button_enabled(self):
         enabled = self.current_index < len(self.orig_entries) - 1
@@ -1174,8 +1700,8 @@ class PlayerUI(QWidget):
 
     # === Search Features ===
     def run_search(self):
-        raw_term = self.search_input.text().strip()
-        term = raw_term.lower()
+        raw_value = self.search_input.text()
+        term = (raw_value or "").strip()
         if not term:
             self._message(
                 QMessageBox.Icon.Warning,
@@ -1183,25 +1709,47 @@ class PlayerUI(QWidget):
                 self.tr("Please enter a search term."),
             )
             return
-        self.search_matches = []
-        for i, entry in enumerate(self.orig_entries):
-            orig_text = entry.text.lower()
-            trans_text = (
-                self.trans_entries[i].text.lower()
-                if i < len(self.trans_entries)
-                else ""
+
+        norm_term = self._normalize_for_search(term)
+        if not norm_term:
+            self._message(
+                QMessageBox.Icon.Warning,
+                self.tr("Empty Search"),
+                self.tr("Please enter a search term."),
             )
-            if term in orig_text or term in trans_text:
+            return
+
+        self.search_matches = []
+        self._search_match_sources = {}
+        self._search_term_raw = term
+        self._search_term_norm = norm_term
+
+        for i, entry in enumerate(self.orig_entries):
+            sources: set[str] = set()
+
+            if self._has_search_match(entry.text, term, norm_term):
+                sources.add("orig")
+
+            trans_text = ""
+            if i < len(self.trans_entries):
+                trans_text = self.trans_entries[i].text
+            if self._has_search_match(trans_text, term, norm_term):
+                sources.add("trans")
+
+            if sources:
                 self.search_matches.append(i)
+                self._search_match_sources[i] = sources
+
         if not self.search_matches:
             self._message(
                 QMessageBox.Icon.Information,
                 self.tr("No Results"),
-                self.tr("No matches for '{term}'.").format(term=raw_term),
+                self.tr("No matches for '{term}'.").format(term=term),
             )
             self.search_btn.setText(self.tr("Search"))
             self.search_counter.setText("")
             return
+
         self.search_index = 0
         self.search_total = len(self.search_matches)
         self.search_btn.setText(self.tr("Next Match"))
@@ -1226,13 +1774,29 @@ class PlayerUI(QWidget):
         entry = self.orig_entries[idx]
         self.player.setPosition(int(entry.start_time * 1000))
         self.update_subtitle_display()
+        self._apply_search_highlight(idx)
         # Update counter before incrementing the index
         try:
             current_pos = self.search_index + 1
             total = getattr(self, 'search_total', len(self.search_matches))
-            self.search_counter.setText(
-                self.tr("{current} of {total}").format(current=current_pos, total=total)
-            )
+            raw_sources = sorted(self._search_match_sources.get(idx, []))
+            label_map = {
+                "orig": self.tr("original"),
+                "trans": self.tr("translation"),
+            }
+            match_sources = ", ".join(label_map.get(src, src) for src in raw_sources)
+            if match_sources:
+                self.search_counter.setText(
+                    self.tr("{current} of {total} ({source})").format(
+                        current=current_pos,
+                        total=total,
+                        source=match_sources,
+                    )
+                )
+            else:
+                self.search_counter.setText(
+                    self.tr("{current} of {total}").format(current=current_pos, total=total)
+                )
         except Exception:
             pass
         self.search_index = (self.search_index + 1) % len(self.search_matches)
@@ -1246,15 +1810,253 @@ class PlayerUI(QWidget):
         self.search_matches = []
         self.search_index = 0
         self.search_total = 0
+        self._search_match_sources = {}
+        self._search_term_raw = ""
+        self._search_term_norm = ""
         if hasattr(self, 'search_btn'):
             self.search_btn.setText(self.tr("Search"))
         if hasattr(self, 'search_counter'):
             self.search_counter.setText("")
+        self._clear_search_highlight()
         self.cancel_extend_selection()
         self.update_debug()
 
     def next_match(self):
         self.jump_to_match()
+
+    @staticmethod
+    def _normalize_for_search(text: str | None) -> str:
+        if not text:
+            return ""
+        normalized = unicodedata.normalize("NFKC", text)
+        normalized = normalized.lower()
+        normalized = re.sub(r"[\W_]+", " ", normalized)
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        return normalized
+
+    def _has_search_match(self, text: str | None, term: str, norm_term: str) -> bool:
+        if not text:
+            return False
+        if self._find_case_insensitive(text, term) != -1:
+            # direct substring match (case-insensitive)
+            return True
+
+        if not norm_term:
+            return False
+        normalized = self._normalize_for_search(text)
+        if not normalized:
+            return False
+        tokens = normalized.split(" ")
+        return norm_term in tokens
+
+    @staticmethod
+    def _find_case_insensitive(haystack: str, needle: str) -> int:
+        if not haystack or not needle:
+            return -1
+        pattern = re.compile(re.escape(needle), re.IGNORECASE)
+        match = pattern.search(haystack)
+        return match.start() if match else -1
+
+    def _clear_search_highlight(self) -> None:
+        try:
+            self.orig_input.deselect()
+        except Exception:
+            pass
+        try:
+            cursor = self.trans_editor.textCursor()
+            cursor.clearSelection()
+            self.trans_editor.setTextCursor(cursor)
+        except Exception:
+            pass
+
+    def _apply_search_highlight(self, idx: int) -> None:
+        self._clear_search_highlight()
+        term = (self._search_term_raw or "").strip()
+        if not term:
+            return
+        sources = self._search_match_sources.get(idx, set())
+        if "orig" in sources:
+            text = self.orig_input.text()
+            pos = self._find_case_insensitive(text, term)
+            if pos != -1:
+                try:
+                    self.orig_input.setSelection(pos, len(term))
+                except Exception:
+                    pass
+        if "trans" in sources:
+            plain = self.trans_editor.toPlainText()
+            pos = self._find_case_insensitive(plain, term)
+            if pos != -1:
+                try:
+                    cursor = self.trans_editor.textCursor()
+                    cursor.setPosition(pos)
+                    cursor.setPosition(pos + len(term), QTextCursor.MoveMode.KeepAnchor)
+                    self.trans_editor.setTextCursor(cursor)
+                    self.trans_editor.ensureCursorVisible()
+                except Exception:
+                    pass
+
+    def _update_selected_word(self) -> None:
+        if not hasattr(self, "vocab_word_display"):
+            return
+        try:
+            selected = self.orig_input.selectedText()
+        except Exception:
+            selected = ""
+        selected = (selected or "").strip()
+        self.vocab_word_display.setText(selected)
+
+    def _update_translate_button_state(self) -> None:
+        if not hasattr(self, "translate_button"):
+            return
+        text_present = bool((self.orig_input.text() or "").strip())
+        enabled = text_present and self._translator_is_available()
+        self.translate_button.setEnabled(enabled)
+        if not enabled and Translator is None:
+            self.translate_button.setToolTip(
+                self.tr("Translation library not installed. Install googletrans to enable.")
+            )
+        elif not enabled and self._translator_unavailable:
+            self.translate_button.setToolTip(
+                self.tr("Translation service unavailable. Try again later.")
+            )
+        else:
+            self.translate_button.setToolTip("")
+
+    def _translator_is_available(self) -> bool:
+        return Translator is not None and not getattr(self, "_translator_unavailable", False)
+
+    def _get_translator(self):
+        if not self._translator_is_available():
+            return None
+        if self._translator_instance is None:
+            try:
+                self._translator_instance = Translator()
+            except Exception:
+                self._translator_unavailable = True
+                return None
+        return self._translator_instance
+
+    def _mark_vocab_modified(self) -> None:
+        self.card_created_for_current_segment = False
+        self.set_create_button_enabled(True)
+
+    def _handle_translate_request(self) -> None:
+        sentence = (self.orig_input.text() or "").strip()
+        if not sentence:
+            self._message(
+                QMessageBox.Icon.Information,
+                self.tr("No Text"),
+                self.tr("Enter or load subtitle text before requesting a translation."),
+            )
+            return
+
+        translated_sentence = self._translate_text(sentence)
+        if translated_sentence:
+            current_translation = self.trans_editor.toPlainText().strip()
+            if not current_translation:
+                self.trans_editor.setPlainText(translated_sentence)
+        else:
+            self._message(
+                QMessageBox.Icon.Warning,
+                self.tr("Translation Failed"),
+                self.tr("Could not reach the translation service. Please try again later."),
+            )
+            return
+
+        selected_word = self.vocab_word_display.text().strip()
+        if selected_word:
+            translated_word = self._translate_text(selected_word, single_word=True)
+            if translated_word:
+                self.vocab_output_edit.setPlainText(translated_word)
+        else:
+            # Preserve existing vocabulary notes if user has already written them.
+            if not self.vocab_output_edit.toPlainText().strip():
+                self.vocab_output_edit.setPlainText(translated_sentence)
+
+        self._mark_vocab_modified()
+
+    def _translate_text(self, text: str, single_word: bool = False) -> str | None:
+        if not text:
+            return None
+        translator = self._get_translator()
+        if not translator:
+            return None
+        try:
+            detection = translator.detect(text)
+            src = detection.lang if detection and detection.lang else "auto"
+        except Exception:
+            src = "auto"
+
+        target = "en"
+        if src == target:
+            return text
+
+        try:
+            result = translator.translate(text, src=src, dest=target)
+            return result.text
+        except Exception:
+            self._translator_unavailable = True
+            self._update_translate_button_state()
+            return None
+
+    def _align_translation_entries(
+        self,
+        orig_entries: list[SubtitleEntry],
+        trans_entries: list[SubtitleEntry],
+        tolerance: float = 2.0,
+    ) -> list[SubtitleEntry]:
+        aligned: list[SubtitleEntry] = []
+        j = 0
+        used: set[int] = set()
+        n = len(trans_entries)
+
+        for orig in orig_entries:
+            best_idx = -1
+            best_delta = float("inf")
+
+            # Advance pointer beyond clearly mismatched entries
+            while j < n and trans_entries[j].start_time < orig.start_time - tolerance:
+                j += 1
+
+            candidates = []
+            if j < n:
+                candidates.append(j)
+            if j - 1 >= 0:
+                candidates.append(j - 1)
+
+            for idx in candidates:
+                if idx in used:
+                    continue
+                delta = abs(trans_entries[idx].start_time - orig.start_time)
+                if delta <= tolerance and delta < best_delta:
+                    best_delta = delta
+                    best_idx = idx
+
+            if best_idx != -1:
+                used.add(best_idx)
+                if best_idx >= j:
+                    j = best_idx + 1
+                match = trans_entries[best_idx]
+                aligned.append(
+                    SubtitleEntry(
+                        index=orig.index,
+                        start_time=orig.start_time,
+                        end_time=orig.end_time,
+                        text=match.text,
+                    )
+                )
+            else:
+                aligned.append(
+                    SubtitleEntry(
+                        index=orig.index,
+                        start_time=orig.start_time,
+                        end_time=orig.end_time,
+                        text="",
+                    )
+                )
+
+        return aligned
 
     # === Anki Card Creation ===
     def create_anki_card(self):
@@ -1299,6 +2101,18 @@ class PlayerUI(QWidget):
         # 3) Gather data
         # Make sure we capture any in-place edits before creating the card
         self.save_current_edits()
+
+        if not self.orig_entries:
+            self._message(
+                QMessageBox.Icon.Warning,
+                self.tr("No Subtitle Data"),
+                self.tr("Load subtitles before creating an Anki card."),
+            )
+            return
+
+        if self.current_index >= len(self.orig_entries):
+            self.current_index = max(0, len(self.orig_entries) - 1)
+
         current_entry = self.orig_entries[self.current_index]
         trans_entry = (
             self.trans_entries[self.current_index]
@@ -1314,6 +2128,12 @@ class PlayerUI(QWidget):
             [t.strip() for t in re.split(r"[,;\s]+", tags_text) if t.strip()]
             if tags_text
             else []
+        )
+        vocab_word = (self.vocab_word_display.text() or "").strip() if hasattr(self, "vocab_word_display") else ""
+        vocab_notes = (
+            self.vocab_output_edit.toPlainText().strip()
+            if hasattr(self, "vocab_output_edit")
+            else ""
         )
 
         # 4) Main operation (single try/except)
@@ -1362,6 +2182,24 @@ class PlayerUI(QWidget):
                         "<div style=\"margin-top:8px;color:#666;\"><em>Source: {source}</em></div>"
                     ).format(source=source_text)
                 )
+
+            if vocab_word or vocab_notes:
+                vocab_html = ""
+                if vocab_notes:
+                    vocab_html = format_markdown(vocab_notes)
+                else:
+                    vocab_html = self.tr("(translation pending)")
+                vocab_block = self.tr(
+                    "<div style=\"margin-top:8px;padding:8px;border:1px solid #e0e0e0; border-radius:6px;\">"
+                    "<strong>{header}</strong><br/>"
+                    "<span style=\"color:#3565B1;\">{word}</span><div>{notes}</div>"
+                    "</div>"
+                ).format(
+                    header=self.tr("Vocabulary"),
+                    word=vocab_word or self.tr("(word not selected)"),
+                    notes=vocab_html,
+                )
+                back_html += vocab_block
 
             anki.add_note(
                 self.orig_input.text().strip() or current_entry.text,
@@ -1418,3 +2256,7 @@ class PlayerUI(QWidget):
                     error=e
                 ),
             )
+try:
+    from googletrans import Translator  # type: ignore
+except ImportError:
+    Translator = None

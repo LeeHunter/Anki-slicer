@@ -22,15 +22,20 @@ Track these items while building features (especially the upcoming YouTube workf
 - [ ] Operations that take noticeable time show textual progress or status feedback.
 - [ ] Success/error notifications have both visual and optional auditory cues.
 - [ ] Audio playback controls support precise adjustments without drag gestures only.
+- [ ] Video playback embeds expose captions/subtitles toggles and language selection that work with assistive tech.
+- [ ] Provide fallback messaging when subtitles are unavailable or still loading.
 
 ## Content Presentation
 - [ ] Subtitle editors support large fonts and expose zoom controls or shortcuts.
 - [ ] Markdown/HTML output for Anki preserves semantic structure (headings, lists) for screen readers.
 - [ ] Source/metadata fields display full text via tooltips or ellipsis with keyboard-accessible reveal.
+- [ ] YouTube URL input is labeled, focusable via keyboard shortcut, and surfaces load status/error announcements.
+- [ ] Favorite/star toggles convey state through text/ARIA roles beyond color or icon changes.
 
 ## Documentation & Testing
 - [ ] Document accessibility features and keyboard shortcuts in the README/user guide.
 - [ ] Smoke test with at least one screen reader (VoiceOver/NVDA) before major releases.
 - [ ] Include accessibility considerations in code review checklists.
+- [ ] Verify mobile builds with platform accessibility inspectors (iOS VoiceOver, Android TalkBack) share parity with desktop.
 
 Feel free to expand this document as new workflows (e.g., video integration) introduce additional requirements.

@@ -75,10 +75,12 @@ At runtime, the launcher sets the icon automatically if the file exists. For bun
     # or
     python -m anki_slicer
 
-    Select your:
-        Audio file
-        Original SRT
-        Translation SRT
+    The player window opens immediately:
+        • Use the new YouTube URL field to paste a link and click “Load” (embedded video appears alongside the waveform).
+        • Pick original/translation subtitles from the dropdowns (auto/manual tracks and machine translations are listed when YouTube provides them).
+        • Click “Load files” to bring up the legacy selector if you want to work from local audio + subtitles.
+        • Pass `--file-selector` when launching if you prefer to start in the old workflow by default.
+
     Use the controls:
         ▶ Forward and Back buttons
         Mode toggle = Continuous vs. Auto‑Pause playback

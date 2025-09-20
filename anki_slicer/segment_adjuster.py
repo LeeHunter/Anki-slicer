@@ -12,8 +12,8 @@ logger = logging.getLogger(__name__)
 class SegmentAdjusterWidget(QWidget):
     def __init__(self, audio_path=None, player=None, parent=None):
         super().__init__(parent)
-        self.setMinimumHeight(160)
-        self.setMaximumHeight(160)
+        self.setMinimumHeight(110)
+        self.setMaximumHeight(110)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         self.raw_start, self.raw_end = 0.0, 1.0

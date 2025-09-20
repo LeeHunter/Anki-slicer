@@ -112,6 +112,10 @@ class PlayerUI(QWidget):
         self._search_term_norm: str = ""
         self._translator_instance = None
         self._translator_unavailable = False
+        self._current_vocab_word: str = ""
+        self._vocab_segment_index: int | None = None
+        self._stream_audio_path: str | None = None
+        self._caption_failure_cache: set[str] = set()
 
         self.player = QMediaPlayer()
         self.audio_output = QAudioOutput()
@@ -213,29 +217,40 @@ class PlayerUI(QWidget):
             return
 
         self._current_video_id = video_id
+        self._release_stream_audio()
+        try:
+            self.player.stop()
+        except Exception:
+            pass
         self.youtube_view.load_video(video_id, autoplay=False)
 
         options = list_transcript_options(video_id)
         self._populate_caption_combos(options)
 
-        if self._tmp_wav is None:
-            wav_path = download_audio_as_wav(video_id)
-            if wav_path:
-                self._temp_audio_files.append(wav_path)
-                try:
-                    self.adjuster.load_waveform(wav_path)
-                    self.player.setSource(QUrl.fromLocalFile(wav_path))
-                    self.player.setPosition(0)
-                    self.pos_slider.setEnabled(True)
-                    self.time_label.setText(self.tr("00:00 / 00:00"))
-                    self._tmp_wav = object()
-                except Exception as exc:
-                    logger.warning("Failed to load waveform for %s: %s", video_id, exc)
-                    self.pos_slider.setEnabled(False)
-                    self.time_label.setText(self.tr("Streaming (audio unavailable)"))
-            else:
+        self._tmp_wav = None
+        if self._stream_audio_path and self.mp3_path == self._stream_audio_path:
+            self.mp3_path = None
+        self.pos_slider.setEnabled(False)
+        self.time_label.setText(self.tr("Loading audio…"))
+        wav_path = download_audio_as_wav(video_id)
+        if wav_path:
+            self._stream_audio_path = wav_path
+            self._temp_audio_files.append(wav_path)
+            try:
+                self.adjuster.load_waveform(wav_path)
+                self.player.setSource(QUrl.fromLocalFile(wav_path))
+                self.player.setPosition(0)
+                self.pos_slider.setEnabled(True)
+                self.time_label.setText(self.tr("00:00 / 00:00"))
+                self._tmp_wav = True
+                self.mp3_path = wav_path
+            except Exception as exc:
+                logger.warning("Failed to load waveform for %s: %s", video_id, exc)
                 self.pos_slider.setEnabled(False)
                 self.time_label.setText(self.tr("Streaming (audio unavailable)"))
+        else:
+            self.pos_slider.setEnabled(False)
+            self.time_label.setText(self.tr("Streaming (audio unavailable)"))
 
     @staticmethod
     def _extract_video_id(value: str) -> str | None:
@@ -268,6 +283,27 @@ class PlayerUI(QWidget):
                     return segments[1][:11]
 
         return None
+
+    def _release_stream_audio(self) -> None:
+        if not self._stream_audio_path:
+            return
+        try:
+            self.player.stop()
+        except Exception:
+            pass
+        try:
+            if os.path.exists(self._stream_audio_path):
+                os.remove(self._stream_audio_path)
+        except Exception as exc:
+            logger.debug("Failed to remove stream audio %s: %s", self._stream_audio_path, exc)
+        try:
+            self._temp_audio_files.remove(self._stream_audio_path)
+        except ValueError:
+            pass
+        self._stream_audio_path = None
+        self._tmp_wav = None
+        if self.mp3_path and not os.path.exists(self.mp3_path):
+            self.mp3_path = None
 
     def _populate_caption_combos(self, options: List[TranscriptOption]) -> None:
         self._caption_options = {opt.key: opt for opt in options}
@@ -368,6 +404,8 @@ class PlayerUI(QWidget):
             return
 
         entries = fetch_caption_entries(option)
+        if not entries and option.translation_code is not None:
+            self._notify_caption_failure(option)
         if kind == "orig":
             self.orig_entries = entries
             self.current_index = 0
@@ -531,37 +569,34 @@ class PlayerUI(QWidget):
         try:
             fo = self.orig_input.font()
             ft = self.trans_editor.font()
-            po = fo.pointSize()
-            pt = ft.pointSize()
-            if po > 0 and pt > 0:
-                mid = max(8, int(round((po + pt) / 2)))
-                fo.setPointSize(mid)
-                ft.setPointSize(mid)
-                self.orig_input.setFont(fo)
-                self.trans_editor.setFont(ft)
+            fo.setPointSize(max(12, fo.pointSize() + 2))
+            ft.setPointSize(max(12, ft.pointSize() + 2))
+            self.orig_input.setFont(fo)
+            self.trans_editor.setFont(ft)
         except Exception:
             pass
 
         # Fix heights: Original ~1 line; Translation ~6 lines (based on unified fonts)
         fm_o = self.orig_input.fontMetrics()
         fm_t = self.trans_editor.fontMetrics()
-        self.orig_input.setMinimumHeight(int(fm_o.lineSpacing() + 12))
-        self.trans_editor.setFixedHeight(int(fm_t.lineSpacing() * 6 + 20))
+        self.orig_input.setMinimumHeight(int(fm_o.lineSpacing() + 16))
+        self.trans_editor.setFixedHeight(int(fm_t.lineSpacing() * 6.5 + 32))
 
         text_fields_container = QWidget()
         text_fields_layout = QVBoxLayout(text_fields_container)
         text_fields_layout.setContentsMargins(0, 0, 0, 0)
         text_fields_layout.setSpacing(8)
-        text_fields_container.setMinimumWidth(320)
-        text_fields_container.setMaximumWidth(560)
+        text_fields_container.setMinimumWidth(340)
+        text_fields_container.setMaximumWidth(600)
 
-        text_fields_layout.addWidget(self.orig_input)
-        text_fields_layout.addWidget(trans_title)
-        text_fields_layout.addWidget(self.trans_editor)
+        text_fields_layout.addWidget(self.orig_input, alignment=Qt.AlignmentFlag.AlignTop)
+        text_fields_layout.addWidget(trans_title, alignment=Qt.AlignmentFlag.AlignTop)
+        text_fields_layout.addWidget(self.trans_editor, alignment=Qt.AlignmentFlag.AlignTop)
 
         text_content_row = QHBoxLayout()
         text_content_row.setSpacing(12)
-        text_content_row.addWidget(text_fields_container, stretch=3)
+        text_content_row.setAlignment(Qt.AlignmentFlag.AlignTop)
+        text_content_row.addWidget(text_fields_container, stretch=3, alignment=Qt.AlignmentFlag.AlignTop)
 
         self.text_future_panel = QFrame()
         self.text_future_panel.setObjectName("text_future_panel")
@@ -576,28 +611,33 @@ class PlayerUI(QWidget):
         future_layout.setContentsMargins(12, 12, 12, 12)
         future_layout.setSpacing(8)
 
+        word_label = QLabel(self.tr("Anki vocabulary"))
+        word_label.setStyleSheet("font-weight:bold; font-size:14px; color:#555555;")
+        future_layout.addWidget(word_label)
+
+        vocab_hint = QLabel(self.tr("Select a word in the source text."))
+        vocab_hint.setWordWrap(True)
+        vocab_hint.setStyleSheet("color:#888888; font-size:12px;")
+        future_layout.addWidget(vocab_hint)
+
+        self.vocab_word_display = QLineEdit()
+        self.vocab_word_display.setReadOnly(True)
+        self.vocab_word_display.setPlaceholderText(self.tr("Select a word in the source text…"))
+        self.vocab_word_display.setStyleSheet(
+            "border:none; padding:4px; background-color: transparent; font-weight:bold; font-size:14px; color:#3565B1;"
+        )
+        future_layout.addWidget(self.vocab_word_display)
+
         translate_header = QLabel(self.tr("Quick Translate"))
         translate_header.setStyleSheet("font-weight:bold; color:#555555; font-size:14px;")
         future_layout.addWidget(translate_header)
 
-        translation_hint = QLabel(
-            self.tr("Use this tool when translations are missing. \nSelect a word in the Original field to focus it.")
+        self.translation_hint = QLabel(
+            self.tr("Use this when translations are missing to populate the translation field automatically.")
         )
-        translation_hint.setWordWrap(True)
-        translation_hint.setStyleSheet("color:#888888; font-size:12px;")
-        future_layout.addWidget(translation_hint)
-
-        word_label = QLabel(self.tr("Selected word"))
-        word_label.setStyleSheet("font-weight:bold; font-size:12px;")
-        future_layout.addWidget(word_label)
-
-        self.vocab_word_display = QLineEdit()
-        self.vocab_word_display.setReadOnly(True)
-        self.vocab_word_display.setPlaceholderText(self.tr("Select a word in the sentence…"))
-        self.vocab_word_display.setStyleSheet(
-            "border: 1px solid #dddddd; border-radius: 4px; padding:4px; background-color:#fefefe;"
-        )
-        future_layout.addWidget(self.vocab_word_display)
+        self.translation_hint.setWordWrap(True)
+        self.translation_hint.setStyleSheet("color:#888888; font-size:12px;")
+        future_layout.addWidget(self.translation_hint)
 
         translate_row = QHBoxLayout()
         self.translate_button = QPushButton(self.tr("Translate"))
@@ -611,23 +651,9 @@ class PlayerUI(QWidget):
         translate_row.addStretch(1)
         future_layout.addLayout(translate_row)
 
-        vocab_label = QLabel(self.tr("Anki Vocabulary"))
-        vocab_label.setStyleSheet("font-weight:bold; font-size:12px;")
-        future_layout.addWidget(vocab_label)
-
-        self.vocab_output_edit = QTextEdit()
-        self.vocab_output_edit.setAcceptRichText(False)
-        self.vocab_output_edit.setPlaceholderText(self.tr("Word meaning, usage notes, etc."))
-        self.vocab_output_edit.setFixedHeight(90)
-        self.vocab_output_edit.setStyleSheet(
-            "border:1px solid #dddddd; border-radius:4px; padding:6px; background-color:#ffffff;"
-        )
-        self.vocab_output_edit.textChanged.connect(self._mark_vocab_modified)
-        future_layout.addWidget(self.vocab_output_edit)
-
         future_layout.addStretch(1)
 
-        text_content_row.addWidget(self.text_future_panel, stretch=2)
+        text_content_row.addWidget(self.text_future_panel, stretch=2, alignment=Qt.AlignmentFlag.AlignTop)
         text_layout.addLayout(text_content_row)
 
         # Add text panel to main layout
@@ -641,26 +667,39 @@ class PlayerUI(QWidget):
         self.sound_panel.setObjectName("sound_panel")
         self.sound_panel.setStyleSheet("background-color:#ffffff; border:none; border-radius:6px;")
         audio_layout = QVBoxLayout(self.sound_panel)
-        audio_layout.setContentsMargins(16, 16, 16, 16)
-        audio_layout.setSpacing(10)
+        audio_layout.setContentsMargins(16, 0, 16, 24)
+        audio_layout.setSpacing(0)
 
         # Slider + time
-        slider_row = QHBoxLayout()
+        slider_container = QWidget()
+        slider_container.setFixedHeight(14)
+        slider_container.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
+        slider_row = QHBoxLayout(slider_container)
+        slider_row.setContentsMargins(0, 0, 0, 0)
+        slider_row.setSpacing(4)
         self.pos_slider = QSlider(Qt.Orientation.Horizontal)
         self.pos_slider.setRange(0, 0)
         self.pos_slider.sliderMoved.connect(self.seek)
         self.pos_slider.sliderPressed.connect(self.on_slider_pressed)
         self.pos_slider.sliderReleased.connect(self.on_slider_released)
         self.pos_slider.setStyleSheet(
-            "QSlider::groove:horizontal{height:6px;background:#e6e6e6;border-radius:3px;}"
-            "QSlider::handle:horizontal{background:#cccccc;border:1px solid #b3b3b3;width:16px;height:16px;margin:-5px 0;border-radius:8px;}"
+            "QSlider::groove:horizontal{height:5px;background:#e6e6e6;border-radius:2px;}"
+            "QSlider::handle:horizontal{background:#cccccc;border:1px solid #b3b3b3;width:16px;height:16px;margin:-6px 0;border-radius:8px;}"
             "QSlider::handle:horizontal:hover{background:#bdbdbd;}"
             "QSlider::handle:horizontal:pressed{background:#9e9e9e;}"
         )
+        self.pos_slider.setFixedHeight(12)
         self.time_label = QLabel("00:00 / 00:00")
         slider_row.addWidget(self.pos_slider, stretch=1)
         slider_row.addWidget(self.time_label)
-        audio_layout.addLayout(slider_row)
+
+        slider_block = QWidget()
+        slider_block_layout = QVBoxLayout(slider_block)
+        slider_block_layout.setContentsMargins(0, 6, 0, 0)
+        slider_block_layout.setSpacing(4)
+        slider_block_layout.addWidget(slider_container, alignment=Qt.AlignmentFlag.AlignTop)
 
         if self._tmp_wav is None:
             self.pos_slider.setEnabled(False)
@@ -669,11 +708,12 @@ class PlayerUI(QWidget):
         # Waveform widget
         self.adjuster = SegmentAdjusterWidget(self.mp3_path, self.player)
         self.adjuster.setFixedHeight(160)
-        audio_layout.addWidget(self.adjuster)
+        slider_block_layout.addWidget(self.adjuster, alignment=Qt.AlignmentFlag.AlignTop)
 
         # === Playback controls ===
-        # Swap positions: Back on the left, Forward on the right. Placed under the waveform per request.
         controls = QHBoxLayout()
+        controls.setContentsMargins(0, 0, 0, 0)
+        controls.setSpacing(8)
         self.back_btn = QPushButton(self.tr("Back"))
         self.back_btn.setStyleSheet("border: 1px solid #dddddd; border-radius: 4px;")
         self.back_btn.clicked.connect(self.back_to_previous)
@@ -691,11 +731,16 @@ class PlayerUI(QWidget):
         controls.addWidget(self.back_btn)
         controls.addWidget(self.forward_btn)
         controls.addWidget(self.mode_btn)
-        audio_layout.addLayout(controls)
-        audio_layout.addSpacing(12)
+        controls_container = QWidget()
+        controls_container.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
+        controls_container.setLayout(controls)
+        slider_block_layout.addWidget(controls_container, alignment=Qt.AlignmentFlag.AlignTop)
 
         # === Segment adjustment controls ===
         segment_controls_row = QHBoxLayout()
+        segment_controls_row.setContentsMargins(0, 4, 0, 0)
         segment_controls_row.setSpacing(10)
 
         start_label = QLabel(self.tr("Adjust Start:"))
@@ -733,7 +778,14 @@ class PlayerUI(QWidget):
         segment_controls_row.addWidget(self.end_minus)
         segment_controls_row.addWidget(self.end_plus)
 
-        audio_layout.addLayout(segment_controls_row)
+        segment_controls_widget = QWidget()
+        segment_controls_widget.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
+        segment_controls_widget.setLayout(segment_controls_row)
+        slider_block_layout.addWidget(segment_controls_widget, alignment=Qt.AlignmentFlag.AlignTop)
+
+        audio_layout.addWidget(slider_block, alignment=Qt.AlignmentFlag.AlignTop)
         # Ensure initial inactive styling/text for Extend button
         try:
             self.set_extend_button_active_style(False)
@@ -1180,16 +1232,16 @@ class PlayerUI(QWidget):
 
         self.show_current_segment_in_adjuster()
 
+        if self._vocab_segment_index != self.current_index:
+            self._reset_vocab_word()
+            self._vocab_segment_index = self.current_index
+
         self.card_created_for_current_segment = False
         self.set_create_button_enabled(True)
         self.update_extend_button_enabled()
         self.update_debug()
         self._update_selected_word()
         self._update_translate_button_state()
-        try:
-            self.vocab_output_edit.clear()
-        except Exception:
-            pass
 
     # ----- Message helpers (use app icon on dialogs) -----
     def _app_qicon(self) -> QIcon:
@@ -1904,7 +1956,14 @@ class PlayerUI(QWidget):
         except Exception:
             selected = ""
         selected = (selected or "").strip()
-        self.vocab_word_display.setText(selected)
+        if selected:
+            words = selected.split()
+            if len(words) > 2:
+                selected = " ".join(words[:2])
+            self._current_vocab_word = selected
+            self.vocab_word_display.setText(selected)
+        elif self._current_vocab_word:
+            self.vocab_word_display.setText(self._current_vocab_word)
 
     def _update_translate_button_state(self) -> None:
         if not hasattr(self, "translate_button"):
@@ -1941,6 +2000,23 @@ class PlayerUI(QWidget):
         self.card_created_for_current_segment = False
         self.set_create_button_enabled(True)
 
+    def _reset_vocab_word(self) -> None:
+        self._current_vocab_word = ""
+        if hasattr(self, "vocab_word_display"):
+            self.vocab_word_display.setText("")
+
+    def _notify_caption_failure(self, option: TranscriptOption) -> None:
+        if option.key in self._caption_failure_cache:
+            return
+        self._caption_failure_cache.add(option.key)
+        self._message(
+            QMessageBox.Icon.Information,
+            self.tr("Translation Unavailable"),
+            self.tr(
+                "YouTube did not return the '{language}' translation captions. This may be due to rate limiting; please try again later or choose a different track."
+            ).format(language=option.label),
+        )
+
     def _handle_translate_request(self) -> None:
         sentence = (self.orig_input.text() or "").strip()
         if not sentence:
@@ -1953,9 +2029,7 @@ class PlayerUI(QWidget):
 
         translated_sentence = self._translate_text(sentence)
         if translated_sentence:
-            current_translation = self.trans_editor.toPlainText().strip()
-            if not current_translation:
-                self.trans_editor.setPlainText(translated_sentence)
+            self.trans_editor.setPlainText(translated_sentence)
         else:
             self._message(
                 QMessageBox.Icon.Warning,
@@ -1964,15 +2038,8 @@ class PlayerUI(QWidget):
             )
             return
 
-        selected_word = self.vocab_word_display.text().strip()
-        if selected_word:
-            translated_word = self._translate_text(selected_word, single_word=True)
-            if translated_word:
-                self.vocab_output_edit.setPlainText(translated_word)
-        else:
-            # Preserve existing vocabulary notes if user has already written them.
-            if not self.vocab_output_edit.toPlainText().strip():
-                self.vocab_output_edit.setPlainText(translated_sentence)
+        if self._current_vocab_word:
+            self.vocab_word_display.setText(self._current_vocab_word)
 
         self._mark_vocab_modified()
 
@@ -2130,11 +2197,6 @@ class PlayerUI(QWidget):
             else []
         )
         vocab_word = (self.vocab_word_display.text() or "").strip() if hasattr(self, "vocab_word_display") else ""
-        vocab_notes = (
-            self.vocab_output_edit.toPlainText().strip()
-            if hasattr(self, "vocab_output_edit")
-            else ""
-        )
 
         # 4) Main operation (single try/except)
         try:
@@ -2183,21 +2245,15 @@ class PlayerUI(QWidget):
                     ).format(source=source_text)
                 )
 
-            if vocab_word or vocab_notes:
-                vocab_html = ""
-                if vocab_notes:
-                    vocab_html = format_markdown(vocab_notes)
-                else:
-                    vocab_html = self.tr("(translation pending)")
+            if vocab_word:
                 vocab_block = self.tr(
                     "<div style=\"margin-top:8px;padding:8px;border:1px solid #e0e0e0; border-radius:6px;\">"
                     "<strong>{header}</strong><br/>"
-                    "<span style=\"color:#3565B1;\">{word}</span><div>{notes}</div>"
+                    "<span style=\"color:#3565B1;\">{word}</span>"
                     "</div>"
                 ).format(
                     header=self.tr("Vocabulary"),
                     word=vocab_word or self.tr("(word not selected)"),
-                    notes=vocab_html,
                 )
                 back_html += vocab_block
 

@@ -7,6 +7,7 @@ This document tracks our shared understanding for the YouTube workflow effort. K
 ## Standing Instructions
 - Keep this plan synchronized with decisions, scope changes, and progress at the end of each working session.
 - Log key Codex conversation snippets with `scripts/append_conversation_log.py` so we retain historical discussions.
+- Update `conversation_logs/codex_session.log` every hour with a summary of conversations and completed activities using the hourly template (timestamp, highlights, completed work, next focus).
 - Update outstanding tasks when work is started, blocked, or completed.
 - Development work is being done on a Apple Silicon Mac so Codex output (e.g. CLI instructions) should assume this platform. 
 
@@ -150,6 +151,8 @@ Recommendation: Stay on the Qt stack (PySide6 preferred for LGPL-friendly mobile
 - [ ] Review `docs/accessibility_checklist.md` updates for YouTube features and translate items into engineering work.
 - [ ] Audit localisation workflow to ensure new video-related strings ship with translations.
 - [ ] Outline a future Settings/Preferences screen (translation provider, API keys, responsive toggles).
+- [ ] Draft Help/Support screen content (FAQ, shortcuts, troubleshooting) and plan implementation.
+- [ ] Add local video file ingestion (MP4, etc.) with audio extraction and non-YouTube workflow support.
 
 ## Done
 - [x] Decide on cross-platform framework and document rationale. ✅ (Framework chosen; update once implementation notes are in place.)
@@ -164,6 +167,7 @@ Recommendation: Stay on the Qt stack (PySide6 preferred for LGPL-friendly mobile
 - [x] Filter caption dropdowns to hide same-language translation duplicates that cause misleading matches.
 - [ ] Improve subtitle search accuracy when translation tracks drift out of sync (low priority polish).
 - [x] Integrate Google Translate for on-demand sentence/word lookup (default provider).
+- [x] Surface graceful messaging when YouTube rate-limits translation caption requests.
 - [ ] Expose translation provider configuration via future Settings screen.
 - [ ] Audit player layouts for responsive breakpoints (desktop/tablet/phone) and capture follow-up adjustments.
 - [ ] Trigger automatic loads from OS-level share intents (Android/iOS) when available.
@@ -202,3 +206,13 @@ Recommendation: Stay on the Qt stack (PySide6 preferred for LGPL-friendly mobile
 - _2025-09-17:_ Switched embed view to `youtube-nocookie` domain with Chrome user agent spoof and iframe wrapper (base URL `http://localhost`) to avoid YouTube error 153.
 - _2025-09-18:_ Subtitle search still shows occasional translation drift false positives; track as polish item rather than blocking bug.
 - _2025-09-18:_ Translate tool wired to Google Translate by default; Settings screen needed later for provider configuration.
+- _2025-09-18:_ Added user-facing warning when YouTube returns 429 for caption translations to avoid silent failures.
+- _2025-09-19:_ Scaffolded mobile workflow screens in PySide6 (`MobileMainScreen`, `MobilePreviewScreen`, `MobileWorkflowWindow`) based on the latest mockups; integrate real playback/export hooks next.
+- _2025-09-19:_ Hooked mobile workflow screens to live playback, waveform, and translation data (`MobileWorkflowWindow.load_media/load_youtube_*`), including audio management and subtitle navigation.
+
+### Touch UX Considerations
+- **Text panel:** replace hover/selection with tap + long-press to pick vocabulary; collapse search + translate actions into a drawer; ensure translation field supports software keyboards without covering content.
+- **Sound panel:** enlarge Back/Forward/Auto-Pause buttons and nudge controls; allow drag-to-adjust handles with finger-friendly tolerances; investigate pinch-to-zoom or two-finger scrubbing for long segments.
+- **YouTube panel:** support OS share intents and file pickers; ensure caption combos and load button are reachable in portrait; consider swapping the embed for a minimal preview on small devices.
+- **Anki panel:** reflow deck/tags/Create Card into a bottom sheet or wizard so the keyboard doesn’t obscure inputs; keep the Create Card CTA accessible when scrolling.
+- **Global layout:** provide stacked/tabbed navigation for Text/Sound/YouTube/Anki panels, respect landscape vs portrait breakpoints, and retain consistent gestures (tap to play/pause, swipe to scrub) across platforms.
